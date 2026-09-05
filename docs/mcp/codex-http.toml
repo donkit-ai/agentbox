@@ -1,0 +1,4 @@
+[mcp_servers.agentbox]
+url = "https://mail.example.com/mcp"
+bearer_token_env_var = "AGENTBOX_API_KEY"
+tool_timeout_sec = 60

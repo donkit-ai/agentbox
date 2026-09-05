@@ -8,7 +8,7 @@ async def test_schema_and_seed(db, settings):
         names = (await s.execute(text("SELECT tablename FROM pg_tables WHERE schemaname='public'"))).scalars().all()
         for t in ["organizations", "api_keys", "domains", "inboxes", "threads", "messages", "attachments",
                   "events", "webhooks", "webhook_deliveries", "delivery_attempts", "provider_accounts",
-                  "inbound_ingests", "idempotency_keys", "jobs"]:
+                  "inbound_ingests", "inbound_endpoints", "idempotency_keys", "jobs"]:
             assert t in names
         dom = await s.scalar(select(Domain).where(Domain.domain == settings.managed_domain))
         assert dom is not None and dom.status == "active" and dom.organization_id is None

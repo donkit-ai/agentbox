@@ -46,8 +46,8 @@ async def create(
                    secret_encrypted=encrypt_str(runtime.settings.app_secret_key, secret),
                    description=body.description, status="active", event_types=body.event_types)
     session.add(hook)
-    await session.commit()
-    return await idem.commit(201, {**webhook_to_dict(hook), "secret": secret})
+    await session.flush()
+    return await idem.commit(201, {**webhook_to_dict(hook), "secret": secret}, session=session)
 
 
 @router.get("")

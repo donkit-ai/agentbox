@@ -8,8 +8,9 @@
     reply = mail.messages.wait_for(inbox["id"], timeout=300)
 """
 
+from agentbox_sdk.async_client import AsyncAgentBox
 from agentbox_sdk.client import AgentBox, AgentBoxError
 from agentbox_sdk.webhooks import verify_webhook_signature
 
-__all__ = ["AgentBox", "AgentBoxError", "verify_webhook_signature"]
-__version__ = "0.1.0"
+__all__ = ["AgentBox", "AsyncAgentBox", "AgentBoxError", "verify_webhook_signature"]
+__version__ = "0.2.0"

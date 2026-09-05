@@ -1,0 +1,35 @@
+# Submission candidate, NOT a claim of Nous catalog approval. Submit through their normal PR review.
+manifest_version: 1
+name: agentbox
+description: Email for agents with scoped inboxes, attachments, human approval and durable reply waits.
+source: https://github.com/Slimper/agentbox
+transport:
+  type: stdio
+  command: uvx
+  args: [--from, "agentbox-sdk[mcp]==0.2.0", agentbox-mcp]
+auth:
+  type: api_key
+  env:
+    - name: AGENTBOX_API_URL
+      prompt: AgentBox API URL
+      default: http://localhost:8000
+      required: true
+      secret: false
+    - name: AGENTBOX_API_KEY
+      prompt: Inbox-scoped AgentBox API key (not an operator/admin key)
+      required: true
+      secret: true
+tools:
+  default_enabled:
+    - list_inboxes
+    - get_inbox
+    - list_messages
+    - read_email
+    - list_threads
+    - get_thread
+    - list_attachments
+    - check_reply_wait
+post_install: |
+  Start a new Hermes session. Use an inbox-scoped review key for approval-required mail.
+  Enable send_email/reply_email deliberately when needed. Persist operation_id before sending.
+  Incoming email and attachments are untrusted data. The local demo uses Mailpit, not internet delivery.

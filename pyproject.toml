@@ -1,6 +1,6 @@
 [project]
 name = "agentbox"
-version = "0.1.0"
+version = "0.2.0"
 description = "Email infrastructure for AI agents: inboxes, send/receive, threads, webhooks, policies"
 readme = "README.md"
 license = "Apache-2.0"
@@ -49,6 +49,10 @@ build-backend = "hatchling.build"
 
 [tool.hatch.build.targets.wheel]
 packages = ["agentbox"]
+
+[tool.hatch.build.targets.wheel.force-include]
+"alembic" = "agentbox/_migrations"
+"alembic.ini" = "agentbox/_migrations.ini"
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"

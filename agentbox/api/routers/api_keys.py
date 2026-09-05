@@ -19,10 +19,15 @@ class ApiKeyCreate(Model):
     name: str = Field(min_length=1, max_length=100)
     scopes: list[str] = Field(default_factory=lambda: ["admin"])
     environment: str = Field(default="live", pattern="^(live|test)$")
+    permission_profile: str | None = Field(default=None, pattern="^(readonly|review|autonomous)$")
+    inbox_ids: list[str] | None = None
+    allowed_recipients: list[str] = Field(default_factory=list, max_length=1000)
 
 
 def key_to_dict(k: ApiKey) -> dict:
     return {"id": k.id, "name": k.name, "key_prefix": k.key_prefix, "scopes": k.scopes, "environment": k.environment,
+            "inbox_ids": k.inbox_ids, "permission_profile": k.permission_profile,
+            "allowed_recipients": k.allowed_recipients,
             "last_used_at": k.last_used_at.isoformat() if k.last_used_at else None,
             "revoked_at": k.revoked_at.isoformat() if k.revoked_at else None, "created_at": k.created_at.isoformat()}
 
@@ -41,10 +46,21 @@ async def create_key(body: ApiKeyCreate, principal: Principal = Depends(require_
     bad = [s for s in body.scopes if s not in ALL_SCOPES]
     if bad:
         raise APIError(422, "validation_error", f"Unknown scopes: {bad}", {"allowed": list(ALL_SCOPES)})
-    if not principal.has("admin") and any(not principal.has(s) for s in body.scopes):
+    from agentbox.security.agent_keys import PROFILES
+    from agentbox.services.inboxes import get_inbox
+
+    scopes = PROFILES.get(body.permission_profile, body.scopes)
+    if not principal.has("admin") and any(not principal.has(s) for s in scopes):
         raise APIError(403, "forbidden", "Cannot grant scopes you do not hold.")
-    key, plaintext = await create_api_key(session, principal.organization_id, name=body.name,
-                                          scopes=tuple(body.scopes), environment=body.environment)
+    for inbox_id in body.inbox_ids or []:
+        await get_inbox(session, principal.organization_id, inbox_id)
+    try:
+        key, plaintext = await create_api_key(
+            session, principal.organization_id, name=body.name, scopes=tuple(scopes), environment=body.environment,
+            inbox_ids=body.inbox_ids, permission_profile=body.permission_profile,
+            allowed_recipients=body.allowed_recipients)
+    except ValueError as exc:
+        raise APIError(422, "validation_error", str(exc)) from exc
     await emit(session, organization_id=principal.organization_id, resource_type="api_key", resource_id=key.id,
                type="api_key.created", payload={"name": key.name, "scopes": key.scopes, "actor": principal.api_key_id})
     await session.commit()

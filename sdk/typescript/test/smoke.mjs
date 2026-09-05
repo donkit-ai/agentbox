@@ -42,6 +42,14 @@ await mail.webhooks.delete(hook.id);
 const empty = await mail.messages.waitFor(inbox.id, { timeoutMs: 1500 });
 assert.equal(empty, null);
 
+const reviewKey = await mail.apiKeys.create({ name: "ts-review", permission_profile: "review", inbox_ids: [inbox.id] });
+const reviewer = new AgentBox({ apiKey: reviewKey.api_key, baseUrl: process.env.AGENTBOX_API_URL });
+assert.equal((await reviewer.me()).permission_profile, "review");
+const pending = await reviewer.messages.send(inbox.id, { to: ["vendor@example.com"], text: "Human approval needed" });
+assert.equal(pending.status, "pending_approval");
+await assert.rejects(() => reviewer.messages.approve(pending.id), (error) => error.status === 403);
+await mail.apiKeys.revoke(reviewKey.id);
+
 try {
   await mail.inboxes.get("ibx_nope");
   assert.fail("expected error");

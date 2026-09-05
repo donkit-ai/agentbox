@@ -43,7 +43,7 @@ async def create(
     existing = await session.scalar(select(Domain).where(Domain.domain == body.domain, Domain.deleted_at.is_(None)))
     if existing is not None:
         if existing.organization_id == principal.organization_id:
-            return await idem.commit(200, domain_to_dict(existing, runtime.settings))
+            return await idem.commit(200, domain_to_dict(existing, runtime.settings), session=session)
         raise APIError(409, "conflict", f"Domain '{body.domain}' is already registered.")
     for hook in registry().hooks(runtime.settings, "domain.before_create"):
         await hook(session, principal.organization_id, runtime.settings)
@@ -55,8 +55,7 @@ async def create(
     await emit(session, organization_id=d.organization_id, resource_type="domain", resource_id=d.id,
                type="domain.verification_pending", payload={"domain_id": d.id, "domain": domain_to_dict(d)})
     await enqueue(session, "domain_verify", {"domain_id": d.id})
-    await session.commit()
-    return await idem.commit(201, domain_to_dict(d, runtime.settings))
+    return await idem.commit(201, domain_to_dict(d, runtime.settings), session=session)
 
 
 @router.get("")

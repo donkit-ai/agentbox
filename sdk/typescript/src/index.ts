@@ -10,6 +10,14 @@
 
 export type Address = string | { email: string; name?: string };
 export type Json = Record<string, any>;
+export interface Page<T> { data: T[]; next_cursor: string | null }
+export interface Inbox { id: string; email: string; username: string; status: string; provider_mode: string;
+  display_name: string | null; metadata: Json; created_at: string; updated_at: string; expires_at: string | null }
+export interface SendResult { id: string; thread_id: string; status: string; created_at: string }
+export interface Message extends Json { id: string; inbox_id: string; thread_id: string; direction: string;
+  status: string; subject: string; text: string | null; html: string | null; attachments: Json[]; created_at: string }
+export interface ReplyWait { message_id: string; status: "pending" | "matched" | "expired";
+  reply_message_id: string | null; expires_at: string }
 
 export class AgentBoxError extends Error {
   constructor(
@@ -29,9 +37,20 @@ export interface AgentBoxOptions {
   baseUrl?: string;
   fetch?: typeof fetch;
   maxRetries?: number;
+  timeoutMs?: number;
+  signal?: AbortSignal;
 }
 
 const RETRY = new Set([429, 502, 503, 504]);
+
+function delay(ms: number, signal?: AbortSignal): Promise<void> {
+  return new Promise((resolve, reject) => {
+    if (signal?.aborted) { reject(signal.reason); return; }
+    const abort = () => { clearTimeout(timer); reject(signal?.reason); };
+    const timer = setTimeout(() => { signal?.removeEventListener("abort", abort); resolve(); }, ms);
+    signal?.addEventListener("abort", abort, { once: true });
+  });
+}
 
 function addresses(items?: Address | Address[]): Json[] {
   if (!items) return [];
@@ -48,6 +67,8 @@ export class AgentBox {
   private readonly apiKey: string;
   private readonly fetchImpl: typeof fetch;
   private readonly maxRetries: number;
+  private readonly timeoutMs: number;
+  private readonly signal?: AbortSignal;
 
   readonly inboxes = new Inboxes(this);
   readonly connections = new Connections(this);
@@ -70,6 +91,8 @@ export class AgentBox {
     this.baseUrl = (opts.baseUrl ?? "http://localhost:8000").replace(/\/+$/, "");
     this.fetchImpl = opts.fetch ?? fetch;
     this.maxRetries = opts.maxRetries ?? 3;
+    this.timeoutMs = opts.timeoutMs ?? 30_000;
+    this.signal = opts.signal;
   }
 
   me(): Promise<Json> {
@@ -79,39 +102,56 @@ export class AgentBox {
   async request(
     method: string,
     path: string,
-    opts: { params?: Json; json?: unknown; idempotencyKey?: string } = {},
+    opts: { params?: Json; json?: unknown; idempotencyKey?: string; timeoutMs?: number; signal?: AbortSignal } = {},
   ): Promise<any> {
     const url = new URL(this.baseUrl + path);
     for (const [k, v] of Object.entries(clean(opts.params ?? {}))) url.searchParams.set(k, String(v));
     const headers: Record<string, string> = {
       Authorization: `Bearer ${this.apiKey}`,
-      "User-Agent": "agentbox-sdk-ts/0.1",
+      "User-Agent": "agentbox-sdk-ts/0.2",
     };
     if (opts.json !== undefined) headers["Content-Type"] = "application/json";
-    if (opts.idempotencyKey) headers["Idempotency-Key"] = opts.idempotencyKey;
-    const retryable = method === "GET" || !!opts.idempotencyKey;
+    method = method.toUpperCase();
+    const safePost = method === "POST" && (path === "/v1/inboxes" || path === "/v1/connections" || /\/(messages|reply|forward)$/.test(path));
+    const operationId = opts.idempotencyKey ?? (safePost ? globalThis.crypto.randomUUID() : undefined);
+    if (operationId) headers["Idempotency-Key"] = operationId;
+    const retryable = method === "GET" || !!operationId;
+    const signal = opts.signal ?? this.signal;
     for (let attempt = 1; ; attempt++) {
-      const resp = await this.fetchImpl(url, {
-        method,
-        headers,
-        body: opts.json !== undefined ? JSON.stringify(opts.json) : undefined,
-      });
+      if (signal?.aborted) throw signal.reason;
+      const controller = new AbortController();
+      const onAbort = () => controller.abort(signal?.reason);
+      signal?.addEventListener("abort", onAbort, { once: true });
+      const timer = setTimeout(() => controller.abort(new Error("AgentBox request timed out")), opts.timeoutMs ?? this.timeoutMs);
+      let resp: Response;
+      let text: string;
+      try {
+        resp = await this.fetchImpl(url, { method, headers, signal: controller.signal,
+          body: opts.json !== undefined ? JSON.stringify(opts.json) : undefined });
+        text = await resp.text();
+      } catch (error) {
+        if (signal?.aborted || !retryable || attempt > this.maxRetries) throw error;
+        await delay(500 * attempt, signal);
+        continue;
+      } finally {
+        clearTimeout(timer);
+        signal?.removeEventListener("abort", onAbort);
+      }
       if (RETRY.has(resp.status) && retryable && attempt <= this.maxRetries) {
         const wait = Number(resp.headers.get("Retry-After") ?? 0) || 0.5 * attempt;
-        await new Promise((r) => setTimeout(r, Math.min(wait, 10) * 1000));
+        await delay(Math.min(wait, 10) * 1000, signal);
         continue;
       }
       if (resp.status >= 400) {
         let err: Json | undefined;
         try {
-          err = (await resp.json()).error;
+          err = JSON.parse(text).error;
         } catch {
-          throw new AgentBoxError(resp.status, "http_error", await resp.text());
+          throw new AgentBoxError(resp.status, "http_error", text.slice(0, 500));
         }
         throw new AgentBoxError(resp.status, err?.code ?? "error", err?.message ?? "", err?.request_id, err?.details);
       }
       if (resp.status === 204) return null;
-      const text = await resp.text();
       return text ? JSON.parse(text) : null;
     }
   }
@@ -119,20 +159,32 @@ export class AgentBox {
 
 class Resource {
   constructor(protected readonly c: AgentBox) {}
+
+  async *paginate<T>(load: (cursor?: string) => Promise<Page<T>>): AsyncGenerator<T> {
+    let cursor: string | undefined;
+    do {
+      const page = await load(cursor);
+      yield* page.data;
+      cursor = page.next_cursor ?? undefined;
+    } while (cursor);
+  }
 }
 
 export class Inboxes extends Resource {
   create(body: { username?: string; domain?: string; display_name?: string; metadata?: Json; ttl?: string } = {},
-         idempotencyKey?: string): Promise<Json> {
+         idempotencyKey?: string): Promise<Inbox> {
     return this.c.request("POST", "/v1/inboxes", { json: clean(body), idempotencyKey });
   }
-  list(params: { status?: string; domain?: string; limit?: number; cursor?: string; metadata?: Json } = {}): Promise<Json> {
+  list(params: { status?: string; domain?: string; limit?: number; cursor?: string; metadata?: Json } = {}): Promise<Page<Inbox>> {
     const { metadata, ...rest } = params;
     const p: Json = { ...rest };
     for (const [k, v] of Object.entries(metadata ?? {})) p[`metadata.${k}`] = v;
     return this.c.request("GET", "/v1/inboxes", { params: p });
   }
-  get(id: string): Promise<Json> { return this.c.request("GET", `/v1/inboxes/${id}`); }
+  get(id: string): Promise<Inbox> { return this.c.request("GET", `/v1/inboxes/${id}`); }
+  iter(params: { status?: string; domain?: string; limit?: number } = {}): AsyncGenerator<Inbox> {
+    return this.paginate(cursor => this.list({ ...params, cursor }));
+  }
   disable(id: string): Promise<Json> { return this.c.request("POST", `/v1/inboxes/${id}/disable`); }
   enable(id: string): Promise<Json> { return this.c.request("POST", `/v1/inboxes/${id}/enable`); }
   delete(id: string): Promise<null> { return this.c.request("DELETE", `/v1/inboxes/${id}`); }
@@ -147,6 +199,8 @@ export interface SendOptions {
 
 /** Existing mailboxes (Gmail, Yandex 360, Microsoft 365, any IMAP) exposed as inboxes. */
 export class Connections extends Resource {
+  createLink(provider = "gmail"): Promise<Json> { return this.c.request("POST", "/v1/connection-links", { json: { provider } }); }
+  linkStatus(id: string): Promise<Json> { return this.c.request("GET", `/v1/connection-links/${id}`); }
   async presets(): Promise<Json[]> { return (await this.c.request("GET", "/v1/connections/presets") as any).data; }
   create(body: { provider: string; address: string; password: string; username?: string; imap_host?: string; imap_port?: number;
                  smtp_host?: string; smtp_port?: number; smtp_ssl?: boolean; display_name?: string; metadata?: Json },
@@ -162,20 +216,30 @@ export class Connections extends Resource {
 }
 
 export class Messages extends Resource {
-  send(inboxId: string, o: SendOptions, idempotencyKey?: string): Promise<Json> {
+  startReplyWait(id: string, expiresIn = 86400): Promise<ReplyWait> {
+    return this.c.request("POST", `/v1/messages/${id}/reply-wait`, { json: { expires_in: expiresIn } });
+  }
+  replyWait(id: string): Promise<ReplyWait> { return this.c.request("GET", `/v1/messages/${id}/reply-wait`); }
+  send(inboxId: string, o: SendOptions, idempotencyKey?: string): Promise<SendResult> {
     const body = clean({ ...o, to: addresses(o.to), cc: addresses(o.cc), bcc: addresses(o.bcc), reply_to: addresses(o.reply_to) });
     return this.c.request("POST", `/v1/inboxes/${inboxId}/messages`, { json: body, idempotencyKey });
   }
   list(inboxId: string, params: { direction?: string; status?: string; thread_id?: string; from?: string; to?: string;
-       since?: string; until?: string; wait?: number; limit?: number; cursor?: string } = {}): Promise<Json> {
-    return this.c.request("GET", `/v1/inboxes/${inboxId}/messages`, { params });
+       since?: string; until?: string; wait?: number; limit?: number; cursor?: string } = {}): Promise<Page<Message>> {
+    return this.c.request("GET", `/v1/inboxes/${inboxId}/messages`, { params, timeoutMs: Math.max(30_000, ((params.wait ?? 0) + 10) * 1000) });
+  }
+  iter(inboxId: string, params: { direction?: string; thread_id?: string; since?: string; limit?: number } = {}): AsyncGenerator<Message> {
+    return this.paginate(cursor => this.list(inboxId, { ...params, cursor }));
   }
   /** Long-poll until an inbound message exists; resolves to the newest message or null on timeout. */
-  async waitFor(inboxId: string, o: { direction?: string; since?: string; thread_id?: string; timeoutMs?: number } = {}): Promise<Json | null> {
+  async waitFor(inboxId: string, o: { direction?: string; since?: string; thread_id?: string; timeoutMs?: number; signal?: AbortSignal } = {}): Promise<Message | null> {
     const deadline = Date.now() + (o.timeoutMs ?? 300_000);
+    const since = o.since ?? new Date().toISOString();
     while (Date.now() < deadline) {
       const wait = Math.max(1, Math.min(60, Math.floor((deadline - Date.now()) / 1000)));
-      const page = await this.list(inboxId, { direction: o.direction ?? "inbound", since: o.since, thread_id: o.thread_id, wait, limit: 1 });
+      const page: Page<Message> = await this.c.request("GET", `/v1/inboxes/${inboxId}/messages`, {
+        params: { direction: o.direction ?? "inbound", since, thread_id: o.thread_id, wait, limit: 1 },
+        timeoutMs: (wait + 10) * 1000, signal: o.signal });
       if (page.data.length) return page.data[0];
     }
     return null;
@@ -230,6 +294,12 @@ export class Webhooks extends Resource {
 }
 
 export class Events extends Resource {
+  claim(consumer: string, options: { types?: string[]; limit?: number; lease_seconds?: number; since?: string } = {}): Promise<Json> {
+    return this.c.request("POST", `/v1/consumers/${encodeURIComponent(consumer)}/claim`, { json: options });
+  }
+  ack(consumer: string, eventId: string, leaseToken: string): Promise<Json> {
+    return this.c.request("POST", `/v1/consumers/${encodeURIComponent(consumer)}/events/${eventId}/ack`, { json: { lease_token: leaseToken } });
+  }
   list(params: { type?: string; resource_id?: string; since?: string; until?: string; limit?: number; cursor?: string } = {}): Promise<Json> { return this.c.request("GET", "/v1/events", { params }); }
 }
 
@@ -276,7 +346,7 @@ export class Usage extends Resource {
 
 export class ApiKeys extends Resource {
   list(): Promise<Json> { return this.c.request("GET", "/v1/api-keys"); }
-  create(body: { name: string; scopes?: string[]; environment?: string }): Promise<Json> { return this.c.request("POST", "/v1/api-keys", { json: clean(body) }); }
+  create(body: { name: string; scopes?: string[]; environment?: string; permission_profile?: "readonly" | "review" | "autonomous"; inbox_ids?: string[]; allowed_recipients?: string[] }): Promise<Json> { return this.c.request("POST", "/v1/api-keys", { json: clean(body) }); }
   revoke(id: string): Promise<null> { return this.c.request("DELETE", `/v1/api-keys/${id}`); }
 }
 

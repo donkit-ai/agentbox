@@ -31,8 +31,7 @@ async def create(
         session, organization_id=principal.organization_id, settings=settings, username=body.username,
         domain=body.domain, display_name=body.display_name, metadata=body.metadata, ttl=body.ttl,
     )
-    await session.commit()
-    return await idem.commit(201, inbox_to_dict(inbox))
+    return await idem.commit(201, inbox_to_dict(inbox), session=session)
 
 
 @router.get("")

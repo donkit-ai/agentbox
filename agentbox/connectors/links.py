@@ -1,0 +1,200 @@
+"""Single-use browser capabilities. Passwords never cross the agent/tool boundary."""
+import hashlib
+import html
+import secrets
+from datetime import timedelta
+from urllib.parse import urlsplit
+
+from fastapi import APIRouter, Depends, Request
+from fastapi.responses import HTMLResponse, RedirectResponse, Response
+from pydantic import Field
+from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from agentbox.api.auth import Principal, require_scope
+from agentbox.api.deps import get_runtime, get_session
+from agentbox.api.errors import APIError, not_found
+from agentbox.api.schemas import Model
+from agentbox.connectors import oauth
+from agentbox.connectors.service import PRESETS, connect_mailbox
+from agentbox.db.models import ConnectionLink, Organization, utcnow
+from agentbox.domain.ids import new_id
+from agentbox.runtime import Runtime
+from agentbox.security.crypto import decrypt_json, encrypt_json
+
+router = APIRouter(tags=["connections"])
+
+
+def digest(value):
+    return hashlib.sha256(value.encode()).hexdigest()
+
+
+def page(body, *, script=""):
+    nonce = secrets.token_urlsafe(20)
+    response = HTMLResponse('<!doctype html><html lang="en"><meta charset="utf-8">'
+        '<meta name="viewport" content="width=device-width,initial-scale=1"><title>Connect to AgentBox</title>'
+        '<main><h1>Connect your mailbox</h1>' + body + '</main>'
+        + (f'<script nonce="{nonce}">{script}</script>' if script else "") + '</html>')
+    response.headers.update({"Cache-Control": "no-store", "Referrer-Policy": "no-referrer",
+        "Content-Security-Policy": f"default-src 'none'; script-src 'nonce-{nonce}'; connect-src 'self'; form-action 'self'; frame-ancestors 'none'; base-uri 'none'",
+        "X-Content-Type-Options": "nosniff"})
+    return response
+
+
+class LinkCreate(Model):
+    provider: str = Field(default="gmail", max_length=30)
+
+
+async def make_link(session, runtime, organization_id, provider):
+    if provider not in PRESETS:
+        raise APIError(422, "validation_error", "Unknown mailbox provider.")
+    public = urlsplit(runtime.settings.public_base_url)
+    if public.scheme != "https" and public.hostname not in ("localhost", "127.0.0.1", "::1"):
+        raise APIError(409, "https_required", "Set AGENTBOX_PUBLIC_BASE_URL to an HTTPS URL before collecting mailbox credentials.")
+    token = secrets.token_urlsafe(32)
+    row = ConnectionLink(id=new_id("tok"), organization_id=organization_id, provider=provider,
+        token_hash=digest(token), expires_at=utcnow() + timedelta(minutes=15),
+        state_encrypted=encrypt_json(runtime.settings.app_secret_key, {"csrf": secrets.token_urlsafe(32)}))
+    session.add(row)
+    await session.commit()
+    return {"id": row.id, "url": f"{runtime.settings.public_base_url.rstrip('/')}/connect/{row.id}#{token}",
+            "status": row.status, "expires_at": row.expires_at.isoformat()}
+
+
+@router.post("/v1/connection-links", status_code=201)
+async def create_link(body: LinkCreate, principal: Principal = Depends(require_scope("inboxes:write")),
+                      session: AsyncSession = Depends(get_session), runtime: Runtime = Depends(get_runtime)):
+    return await make_link(session, runtime, principal.organization_id, body.provider)
+
+
+@router.get("/v1/connection-links/{link_id}")
+async def link_status(link_id: str, principal: Principal = Depends(require_scope("inboxes:write")),
+                       session: AsyncSession = Depends(get_session)):
+    row = await session.scalar(select(ConnectionLink).where(ConnectionLink.id == link_id,
+                                ConnectionLink.organization_id == principal.organization_id))
+    if row is None:
+        raise not_found("connection_link", link_id)
+    return {"id": row.id, "status": "expired" if row.status == "pending" and row.expires_at <= utcnow() else row.status,
+            "inbox_id": row.inbox_id, "expires_at": row.expires_at.isoformat()}
+
+
+async def browser_link(session, link_id, request, *, token=None):
+    row = await session.scalar(select(ConnectionLink).where(ConnectionLink.id == link_id).with_for_update())
+    token = token or request.cookies.get("ab_connect_" + link_id, "")
+    if row is None or not secrets.compare_digest(row.token_hash, digest(token)):
+        raise APIError(404, "not_found", "Connection link not found. Open the full link supplied by your agent.")
+    if row.status != "pending" or row.expires_at <= utcnow():
+        raise APIError(410, "link_expired", "This link is expired or already used. Ask for a new connection link.")
+    org = await session.get(Organization, row.organization_id)
+    if org is None or org.status != "active":
+        raise APIError(403, "forbidden", "Organization is not active.")
+    return row
+
+
+class BrowserToken(Model):
+    token: str = Field(min_length=20, max_length=100)
+
+
+@router.post("/connect/{link_id}/session", include_in_schema=False)
+async def exchange_link(link_id: str, body: BrowserToken, request: Request,
+                         session: AsyncSession = Depends(get_session), runtime: Runtime = Depends(get_runtime)):
+    await browser_link(session, link_id, request, token=body.token)
+    response = Response(status_code=204, headers={"Cache-Control": "no-store"})
+    response.set_cookie("ab_connect_" + link_id, body.token, httponly=True, samesite="lax", max_age=900,
+                        secure=runtime.settings.public_base_url.startswith("https:"), path="/connect/")
+    return response
+
+
+@router.get("/connect/{link_id}", include_in_schema=False)
+async def connect_page(link_id: str, request: Request, session: AsyncSession = Depends(get_session),
+                         runtime: Runtime = Depends(get_runtime)):
+    if not request.cookies.get("ab_connect_" + link_id):
+        # URL fragments are never sent to HTTP servers, access logs or Referer headers.
+        return page('<p id="status">Opening your private connection link…</p>', script="""
+const token = location.hash.slice(1); history.replaceState(null, '', location.pathname);
+if (!token) document.getElementById('status').textContent = 'Open the complete connection link from your agent.';
+else fetch(location.pathname + '/session', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({token})})
+  .then(r => {if(r.ok) location.reload(); else document.getElementById('status').textContent='Link expired or invalid. Ask for a new link.';})
+  .catch(() => {document.getElementById('status').textContent='Connection failed. Open the original link again.';});
+""")
+    row = await browser_link(session, link_id, request)
+    state = decrypt_json(runtime.settings.app_secret_key, row.state_encrypted)
+    org = await session.get(Organization, row.organization_id)
+    body = f'<p>You are granting <strong>{html.escape(org.name)}</strong> access to read and send email from this mailbox.</p>'
+    body += '<p>Credentials are encrypted on the server and are never returned to the agent. Connect only a mailbox you are authorized to use.</p>'
+    hidden = f'<input type="hidden" name="csrf" value="{html.escape(state["csrf"])}">'
+    if oauth.configured(runtime.settings, row.provider):
+        body += f'<form method="post" action="/connect/{row.id}/oauth">{hidden}<button>Continue with {html.escape(PRESETS[row.provider]["label"])}</button></form>'
+    if row.provider == "m365":
+        if not oauth.configured(runtime.settings, row.provider):
+            body += '<p>Microsoft 365 requires OAuth. Ask the operator to configure the Microsoft client ID and secret.</p>'
+    else:
+        body += f'<p>{html.escape(PRESETS[row.provider]["hint"])}</p><form method="post" action="/connect/{row.id}/password">{hidden}'
+        body += '<p><label>Mailbox address <input type="email" name="address" required autocomplete="username"></label></p>'
+        body += '<p><label>App password <input type="password" name="password" required autocomplete="new-password"></label></p>'
+        if row.provider == "imap":
+            body += '<p><label>IMAP TLS host <input name="imap_host" required></label> <label>Port <input type="number" name="imap_port" value="993" min="1" max="65535"></label></p>'
+            body += '<p><label>SMTP STARTTLS host <input name="smtp_host" required></label> <label>Port <input type="number" name="smtp_port" value="587" min="1" max="65535"></label></p>'
+        body += '<p><label><input type="checkbox" name="import_history"> Import existing email (otherwise only new messages)</label></p><button>Allow access and connect</button></form>'
+    return page(body)
+
+
+async def form_state(session, runtime, link_id, request):
+    row = await browser_link(session, link_id, request)
+    state = decrypt_json(runtime.settings.app_secret_key, row.state_encrypted)
+    form = await request.form(max_fields=10, max_files=0, max_part_size=16384)
+    if not secrets.compare_digest(str(form.get("csrf", "")), state["csrf"]):
+        raise APIError(403, "csrf_invalid", "Reload the connection form and try again.")
+    return row, state, form
+
+
+async def finish(session, runtime, row, **kwargs):
+    inbox, _ = await connect_mailbox(session, runtime.settings, organization_id=row.organization_id,
+        provider=row.provider, username=kwargs["address"], verify_credentials=True, **kwargs)
+    row.status, row.inbox_id = "connected", inbox.id
+    row.state_encrypted = encrypt_json(runtime.settings.app_secret_key, {})
+    await session.commit()
+    return page(f'<p>Connected <strong>{html.escape(inbox.address)}</strong>. You can close this window and return to your agent.</p><p>IMAP login verified; first sync queued. SMTP delivery is checked when sending.</p>')
+
+
+@router.post("/connect/{link_id}/password", include_in_schema=False)
+async def connect_password(link_id: str, request: Request, session: AsyncSession = Depends(get_session),
+                             runtime: Runtime = Depends(get_runtime)):
+    row, _, form = await form_state(session, runtime, link_id, request)
+    try:
+        return await finish(session, runtime, row, address=str(form.get("address", "")), password=str(form.get("password", "")),
+            imap_host=form.get("imap_host"), smtp_host=form.get("smtp_host"),
+            imap_port=int(form["imap_port"]) if form.get("imap_port") else None,
+            smtp_port=int(form["smtp_port"]) if form.get("smtp_port") else None,
+            import_history=form.get("import_history") == "on")
+    except ValueError as exc:
+        raise APIError(422, "validation_error", "Ports must be valid integers.") from exc
+
+
+@router.post("/connect/{link_id}/oauth", include_in_schema=False)
+async def start_oauth(link_id: str, request: Request, session: AsyncSession = Depends(get_session),
+                       runtime: Runtime = Depends(get_runtime)):
+    row, state, _ = await form_state(session, runtime, link_id, request)
+    state.update(verifier=secrets.token_urlsafe(48), nonce=secrets.token_urlsafe(32), oauth_state=secrets.token_urlsafe(32))
+    redirect_uri = runtime.settings.public_base_url.rstrip("/") + "/connect/oauth/callback"
+    url = oauth.authorize_url(runtime.settings, row.provider, redirect_uri, row.id + "." + state["oauth_state"],
+                              state["verifier"], state["nonce"])
+    row.state_encrypted = encrypt_json(runtime.settings.app_secret_key, state)
+    await session.commit()
+    return RedirectResponse(url, status_code=303, headers={"Cache-Control": "no-store", "Referrer-Policy": "no-referrer"})
+
+
+@router.get("/connect/oauth/callback", include_in_schema=False)
+async def oauth_callback(request: Request, state: str = "", code: str = "", error: str = "",
+                          session: AsyncSession = Depends(get_session), runtime: Runtime = Depends(get_runtime)):
+    link_id, _, token = state.partition(".")
+    row = await browser_link(session, link_id, request)
+    saved = decrypt_json(runtime.settings.app_secret_key, row.state_encrypted)
+    if not token or not secrets.compare_digest(token, saved.get("oauth_state", "")):
+        raise APIError(403, "oauth_state_invalid", "OAuth state does not match this browser session.")
+    if error or not code:
+        return page('<p>Authorization was cancelled or failed. Open your original link to try again.</p>')
+    redirect_uri = runtime.settings.public_base_url.rstrip("/") + "/connect/oauth/callback"
+    tokens = await oauth.exchange_code(runtime.http, runtime.settings, row.provider, code, redirect_uri,
+                                       saved["verifier"], saved["nonce"])
+    return await finish(session, runtime, row, address=tokens["email"], password=None, oauth=tokens, import_history=False)

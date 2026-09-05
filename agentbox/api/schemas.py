@@ -34,6 +34,9 @@ class MeOut(BaseModel):
     api_key_id: str
     scopes: list[str] = Field(default_factory=list)
     environment: str
+    inbox_ids: list[str] | None = None
+    permission_profile: str | None = None
+    allowed_recipients: list[str] = Field(default_factory=list)
 
 
 class InboxCreate(Model):

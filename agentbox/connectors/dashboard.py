@@ -33,6 +33,19 @@ async def connectors(request: Request, connect: str | None = None, principal=Dep
     return _render(request, "connectors.html", ctx)
 
 
+@router.post("/dashboard/connectors/link")
+async def browser_connect(provider: str = Form("gmail"), principal=Depends(dash_principal),
+                            session: AsyncSession = Depends(get_session), runtime: Runtime = Depends(get_runtime)):
+    if not principal.has("inboxes:write"):
+        raise APIError(403, "forbidden", "API key lacks scope 'inboxes:write'.")
+    from agentbox.connectors.links import make_link
+
+    link = await make_link(session, runtime, principal.organization_id, provider)
+    from fastapi.responses import RedirectResponse
+
+    return RedirectResponse(link["url"], status_code=303, headers={"Cache-Control": "no-store", "Referrer-Policy": "no-referrer"})
+
+
 @router.post("/dashboard/connectors")
 async def connect(provider: str = Form(...), address: str = Form(...), username: str = Form(""), password: str = Form(...),
                   imap_host: str = Form(""), imap_port: str = Form(""), smtp_host: str = Form(""), smtp_port: str = Form(""),

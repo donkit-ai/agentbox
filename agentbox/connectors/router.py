@@ -63,8 +63,7 @@ async def create(
         smtp_host=body.smtp_host, smtp_port=body.smtp_port, smtp_ssl=body.smtp_ssl, display_name=body.display_name,
         metadata=body.metadata,
     )
-    await session.commit()
-    return await idem.commit(201, {**connection_to_dict(conn, settings), "inbox": inbox_to_dict(inbox)})
+    return await idem.commit(201, {**connection_to_dict(conn, settings), "inbox": inbox_to_dict(inbox)}, session=session)
 
 
 @router.get("")

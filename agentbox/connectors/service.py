@@ -40,8 +40,8 @@ PRESETS: dict[str, dict] = {
                     "hint": "Create an app password for external clients."},
     "m365": {"label": "Microsoft 365 / Exchange Online", "imap_host": "outlook.office365.com", "imap_port": 993,
              "smtp_host": "smtp.office365.com", "smtp_port": 587, "smtp_ssl": False,
-             "hint": "IMAP and SMTP AUTH must be enabled for the mailbox (app password), or connect with OAuth when the "
-                     "operator has registered a Microsoft app.", "oauth": "m365"},
+             "hint": "Requires OAuth: Exchange Online does not support IMAP app passwords. The operator must register "
+                     "a Microsoft app and enable IMAP and SMTP AUTH for the mailbox.", "oauth": "m365"},
     "gmail": {"label": "Google Workspace / Gmail", "imap_host": "imap.gmail.com", "imap_port": 993,
               "smtp_host": "smtp.gmail.com", "smtp_port": 587, "smtp_ssl": False,
               "hint": "Create an app password (Google account → Security → 2-step verification → App passwords), or "
@@ -85,6 +85,13 @@ class StdlibImap:
                 out.append(FetchedMail(uid=uid, raw=parts[0][1]))
         return out
 
+    def latest_uid(self) -> int:
+        typ, data = self.conn.response("UIDNEXT")
+        if data and data[0]:
+            return max(0, int(data[0]) - 1)
+        typ, data = self.conn.uid("SEARCH", None, "ALL")
+        return max((int(uid) for uid in data[0].split()), default=0) if typ == "OK" and data and data[0] else 0
+
     def close(self) -> None:
         try:
             self.conn.logout()
@@ -112,7 +119,7 @@ async def connect_mailbox(
     session: AsyncSession, settings: Settings, *, organization_id: str, provider: str, address: str, username: str | None,
     password: str | None, imap_host: str | None = None, imap_port: int | None = None, smtp_host: str | None = None,
     smtp_port: int | None = None, smtp_ssl: bool | None = None, display_name: str | None = None, metadata: dict | None = None,
-    oauth: dict | None = None,
+    oauth: dict | None = None, verify_credentials: bool = False, import_history: bool = True,
 ) -> tuple[Inbox, MailboxConnection]:
     """`oauth` (extension-provided token config) replaces the password; it is stored encrypted with the rest."""
     preset = PRESETS.get(provider)
@@ -123,6 +130,8 @@ async def connect_mailbox(
         raise APIError(422, "validation_error", "Enter the mailbox address.")
     if not password and not oauth:
         raise APIError(422, "validation_error", "Password / app password is required.")
+    if provider == "m365" and not oauth:
+        raise APIError(422, "oauth_required", "Microsoft 365 requires OAuth; app passwords cannot authenticate IMAP.")
     cfg = {"imap_host": imap_host or preset["imap_host"], "imap_port": imap_port or preset["imap_port"],
            "smtp_host": smtp_host or preset["smtp_host"], "smtp_port": smtp_port or preset["smtp_port"],
            "smtp_ssl": preset["smtp_ssl"] if smtp_ssl is None else smtp_ssl, "username": username or address,
@@ -131,22 +140,30 @@ async def connect_mailbox(
         cfg.update({k: v for k, v in oauth.items() if k != "email"})
     if not cfg["imap_host"] or not cfg["smtp_host"]:
         raise APIError(422, "validation_error", "IMAP and SMTP hosts are required for a generic connection.")
+    initial_uid = 0
+    if verify_credentials:
+        def check():
+            client = _client_factory(cfg)
+            try:
+                return 0 if import_history else client.latest_uid()
+            finally:
+                client.close()
+        try:
+            initial_uid = await asyncio.to_thread(check)
+        except Exception as exc:
+            raise APIError(422, "mailbox_login_failed", "IMAP login failed. Check the address, app password, IMAP access and TLS host/port.") from exc
     existing = await session.scalar(select(Inbox).where(Inbox.address == address, Inbox.deleted_at.is_(None)))
     if existing is not None:
         raise APIError(409, "conflict", f"{address} is already connected.")
     from agentbox.db.models import Domain
-    from agentbox.services.inboxes import get_domain_for_org
 
     domain_name = address.rpartition("@")[2]
     domain = await session.scalar(select(Domain).where(Domain.domain == domain_name, Domain.deleted_at.is_(None)))
     if domain is None:
-        domain = Domain(id=new_id("dom"), organization_id=organization_id, domain=domain_name, type="customer_external",
+        domain = Domain(id=new_id("dom"), organization_id=None, domain=domain_name, type="customer_external",
                         status="active", inbound_status="connected", outbound_status="connected")
         session.add(domain)
         await session.flush()
-    elif domain.organization_id not in (organization_id, None):
-        raise APIError(409, "conflict", f"Domain {domain_name} belongs to another organization.")
-    _ = get_domain_for_org
     inbox = Inbox(id=new_id("ibx"), organization_id=organization_id, address=address, username=address.split("@")[0],
                   domain_id=domain.id, display_name=display_name, status="active", provider_mode="connected",
                   metadata_=metadata or {})
@@ -154,6 +171,7 @@ async def connect_mailbox(
     await session.flush()
     conn = MailboxConnection(id=new_id("mbc"), organization_id=organization_id, inbox_id=inbox.id, provider=provider,
                              address=address, config_encrypted=encrypt_json(settings.app_secret_key, cfg),
+                             last_uid=initial_uid,
                              sync_interval_seconds=settings.connector_sync_interval_seconds)
     session.add(conn)
     await session.flush()
@@ -166,6 +184,11 @@ async def connect_mailbox(
 async def _fresh_config(session: AsyncSession, settings: Settings, conn: MailboxConnection, http) -> dict:
     """Decrypt the connector config; extensions may refresh short-lived credentials in place (and they get persisted)."""
     cfg = decrypt_json(settings.app_secret_key, conn.config_encrypted)
+    from agentbox.connectors.oauth import refresh_if_needed
+
+    if await refresh_if_needed(http, settings, cfg):
+        conn.config_encrypted = encrypt_json(settings.app_secret_key, cfg)
+        await session.flush()
     for hook in registry().hooks(settings, "connector.refresh_config"):
         if await hook(session, settings, conn, cfg, http):
             conn.config_encrypted = encrypt_json(settings.app_secret_key, cfg)

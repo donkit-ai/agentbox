@@ -14,9 +14,14 @@ ROOT = Path(__file__).resolve().parents[2]
 def alembic_config() -> Config:
     from agentbox.extensions import registry
 
-    cfg = Config(str(ROOT / "alembic.ini"))
-    cfg.set_main_option("script_location", str(ROOT / "alembic"))
-    locations = [str(ROOT / "alembic" / "versions"), *registry().migration_dirs()]
+    migrations = ROOT / "alembic"
+    ini = ROOT / "alembic.ini"
+    if not (migrations / "env.py").is_file():
+        migrations = Path(__file__).resolve().parents[1] / "_migrations"
+        ini = migrations.with_suffix(".ini")
+    cfg = Config(str(ini))
+    cfg.set_main_option("script_location", str(migrations))
+    locations = [str(migrations / "versions"), *registry().migration_dirs()]
     cfg.set_main_option("version_locations", " ".join(locations))
     return cfg
 

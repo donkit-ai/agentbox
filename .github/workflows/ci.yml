@@ -3,8 +3,22 @@ name: ci
 on:
   push: { branches: [main] }
   pull_request:
+  workflow_call:
 
 jobs:
+  sdk-compatibility:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        python: ["3.10", "3.12"]
+        mcp: ["mcp>=1.26,<2", "mcp>=2,<3"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v3
+      - run: >-
+          uv run --no-project --python '${{ matrix.python }}'
+          --with './sdk/python[mcp]' --with '${{ matrix.mcp }}'
+          python -c 'import asyncio; from agentbox_sdk import AsyncAgentBox; from agentbox_sdk.mcp_server import build_server; from agentbox_sdk.mcp_http import create_http_app; assert asyncio.run(build_server().list_tools()); assert create_http_app()'
   test:
     runs-on: ubuntu-latest
     services:
@@ -29,9 +43,14 @@ jobs:
           for i in $(seq 1 30); do curl -sf http://localhost:9010/minio/health/live && break; sleep 1; done
       - run: uv sync --extra dev
       - run: uv run ruff check .
+      - run: |
+          uv run python sdk/python/scripts/generate_async.py
+          uv run ruff format sdk/python/agentbox_sdk/async_client.py
+          uv run ruff check --fix sdk/python/agentbox_sdk/async_client.py
+          git diff --exit-code -- sdk/python/agentbox_sdk/async_client.py
       - run: psql postgresql://agentbox:agentbox@localhost:5434/agentbox -c "CREATE DATABASE agentbox_test;"
-      - run: cd sdk/typescript && npm ci --silent || npm install --silent && npm run build
-      - run: uv run pytest -q
+      - run: cd sdk/typescript && npm ci --silent && npm run build
+      - run: uv run pytest -q --tb=short --show-capture=no
         env:
           AGENTBOX_TEST_DATABASE_URL: postgresql+asyncpg://agentbox:agentbox@localhost:5434/agentbox_test
           AGENTBOX_S3_ENDPOINT: http://localhost:9010

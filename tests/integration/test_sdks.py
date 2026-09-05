@@ -6,7 +6,7 @@ from pathlib import Path
 import pytest
 
 from agentbox.webhooks.signing import signature_header
-from agentbox_sdk import AgentBox, AgentBoxError, verify_webhook_signature
+from agentbox_sdk import AgentBox, AgentBoxError, AsyncAgentBox, verify_webhook_signature
 from agentbox_sdk.mcp_server import build_server
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -60,16 +60,60 @@ async def test_mcp_tools(live_api_url, org):
     inbox = _payload(res)
     assert inbox["email"] == "mcp-agent@agentbox.local"
     sent = _payload(await server.call_tool("send_email", {"inbox_id": inbox["id"], "to": ["v@example.com"],
-                                                          "subject": "MCP", "text": "hello"}))
+                                                          "subject": "MCP", "text": "hello", "operation_id": "mcp-send-1"}))
     assert sent["status"] == "queued"
     thread = _payload(await server.call_tool("get_thread", {"thread_id": sent["thread_id"]}))
     assert thread["messages"][0]["preview"] == "hello"
     msgs = _payload(await server.call_tool("list_messages", {"inbox_id": inbox["id"], "direction": "outbound"}))
-    assert [m["id"] for m in msgs] == [sent["id"]]
+    assert [m["id"] for m in msgs["data"]] == [sent["id"]]
     err = _payload(await server.call_tool("read_email", {"message_id": "msg_nope"}))
     assert err["error"]["code"] == "not_found"
     waited = _payload(await server.call_tool("wait_for_email", {"inbox_id": inbox["id"], "timeout_seconds": 1}))
     assert waited is None
+
+
+async def test_async_sdk_end_to_end(live_api_url, org):
+    async with AsyncAgentBox(org.api_key, base_url=live_api_url) as mail:
+        inbox = await mail.inboxes.create()
+        await mail.inboxes.create()
+        assert len([i async for i in mail.inboxes.iter(limit=1)]) == 2
+        sent = await mail.messages.send(inbox["id"], to="vendor@example.com", text="async", idempotency_key="async-1")
+        assert (await mail.messages.get(sent["id"]))["text"] == "async"
+        wait = await mail.messages.start_reply_wait(sent["id"])
+        assert wait["status"] == "pending"
+        assert await mail.messages.reply_wait(sent["id"]) == wait
+        aid = await mail.attachments.upload("async.txt", b"async", "text/plain")
+        assert await mail.attachments.download(aid) == b"async"
+        assert (await mail.connections.presets())[0]["key"]
+
+
+async def test_remote_mcp_auth_and_tenant_isolation(live_api_url, org, make_org, monkeypatch):
+    import httpx
+
+    from agentbox_sdk.mcp_http import create_http_app
+
+    monkeypatch.setenv("AGENTBOX_API_URL", live_api_url)
+    # A configured admin key must NEVER be used as a fallback by remote requests.
+    monkeypatch.setenv("AGENTBOX_API_KEY", org.api_key)
+    other = await make_org()
+    with AgentBox(org.api_key, base_url=live_api_url) as mail:
+        inbox = mail.inboxes.create()
+    app = create_http_app()
+    async with app.router.lifespan_context(app), httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app), base_url="http://localhost:8001",
+        headers={"Accept": "application/json, text/event-stream", "MCP-Protocol-Version": "2025-11-25"},
+    ) as client:
+        body = {"jsonrpc": "2.0", "id": 1, "method": "tools/call", "params": {"name": "list_inboxes", "arguments": {}}}
+        assert (await client.post("/mcp", json=body)).status_code == 401
+        assert (await client.post("/mcp", json=body, headers={"Authorization": "Bearer invalid"})).status_code == 401
+        r = await client.post("/mcp", json=body, headers=org.headers)
+        assert r.status_code == 200, r.text
+        assert inbox["id"] in r.text, r.text
+        r = await client.post("/mcp", json=body, headers=other.headers)
+        assert r.status_code == 200 and inbox["id"] not in r.text, r.text
+        assert (await client.post("/mcp", json=body, headers={**org.headers, "Origin": "https://evil.example"})).status_code == 403
+        tools = await client.post("/mcp", headers=org.headers, json={"jsonrpc": "2.0", "id": 2, "method": "tools/list"})
+        assert '"name":"upload_file"' not in tools.text
 
 
 def _payload(result):

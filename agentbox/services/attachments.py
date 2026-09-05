@@ -36,6 +36,7 @@ async def create_upload(
                        f"Attachment size must be between 1 and {settings.max_attachment_bytes} bytes.")
     att = Attachment(
         id=new_id("att"), organization_id=organization_id, message_id=None, filename=filename,
+        uploaded_by_key_id=(session.info["principal"].api_key_id if session.info.get("principal") else None),
         content_type=content_type, size_bytes=size_bytes, status="pending", expires_at=utcnow() + UPLOAD_TTL,
     )
     att.storage_key = storage_key_for(organization_id, att.id)

@@ -48,8 +48,7 @@ async def send(
     )
     message = await create_outbound_message(session, runtime.storage, runtime.settings,
                                             organization_id=principal.organization_id, inbox=inbox, draft=draft)
-    await session.commit()
-    return await idem.commit(202, _queued(message))
+    return await idem.commit(202, _queued(message), session=session)
 
 
 @router.get("/inboxes/{inbox_id}/messages")
@@ -114,8 +113,7 @@ async def reply(
                               attachment_ids=body.attachment_ids)
     message = await create_outbound_message(session, runtime.storage, runtime.settings,
                                             organization_id=principal.organization_id, inbox=inbox, draft=draft)
-    await session.commit()
-    return await idem.commit(202, _queued(message))
+    return await idem.commit(202, _queued(message), session=session)
 
 
 @router.post("/messages/{message_id}/forward", status_code=202)
@@ -133,5 +131,4 @@ async def forward(
                                 text=body.text, html=body.html, include_attachments=body.include_attachments)
     message = await create_outbound_message(session, runtime.storage, runtime.settings,
                                             organization_id=principal.organization_id, inbox=inbox, draft=draft)
-    await session.commit()
-    return await idem.commit(202, _queued(message))
+    return await idem.commit(202, _queued(message), session=session)

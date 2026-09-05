@@ -105,7 +105,8 @@ async def test_policy_form_webhooks_keys_console(dash, org, runtime):
     assert "secret=whsec_" in r.headers["location"]
     # api keys
     r = await dash.post("/dashboard/api-keys", data={"name": "ops", "scopes": ["inboxes:read"], "environment": "test"})
-    assert r.status_code == 303 and "new_key=ab_test_" in r.headers["location"]
+    assert r.status_code == 200 and "ab_test_" in r.text
+    assert r.headers["Cache-Control"] == "no-store" and "location" not in r.headers
     # console runs a real request against the API with the session key
     r = await dash.post("/dashboard/console/run", data={"ep": 0, "lang": "curl", "resource_id": "",
                                                         "body": '{"username": "console-agent"}'})

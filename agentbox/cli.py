@@ -8,9 +8,61 @@ from agentbox.config import get_settings
 
 ROOT = Path(__file__).resolve().parents[1]
 
-app = typer.Typer(help="AgentBox — programmable email identities for AI agents", no_args_is_help=True)
+app = typer.Typer(help="AgentBox — programmable email identities for AI agents", no_args_is_help=True,
+                  pretty_exceptions_show_locals=False)
 org_app = typer.Typer(help="Organizations")
 app.add_typer(org_app, name="org")
+
+
+@app.command()
+def init(
+    directory: Path = Path("agentbox-local"), mode: str = "demo", provider: str = "gmail",
+    image: str = "ghcr.io/slimper/agentbox:0.2.0", build: bool = False,
+    port: int = 8000, name: str = "My agents", domain: str = "",
+) -> None:
+    """Start an isolated Docker stack: --mode demo | mailbox | domain. Existing configuration is never overwritten."""
+    from agentbox.onboarding import initialize
+
+    initialize(directory=directory, mode=mode, provider=provider, image=image,
+               build=build, port=port, name=name, domain=domain)
+
+
+@app.command()
+def doctor(json_output: bool = typer.Option(False, "--json"), roundtrip: bool = False,
+           organization_id: str = "", inbox_id: str = "") -> None:
+    """Check database, storage, worker, mailbox and send setup. --roundtrip sends a LOCAL demo probe only."""
+    import json
+
+    from agentbox.diagnostics import demo_roundtrip, diagnose
+    from agentbox.runtime import Runtime
+
+    async def run():
+        runtime = Runtime.create()
+        try:
+            report = await diagnose(runtime, organization_id or None)
+            if roundtrip:
+                if not organization_id or not inbox_id:
+                    raise typer.BadParameter("--roundtrip requires --organization-id and --inbox-id")
+                report["roundtrip"] = await demo_roundtrip(runtime, organization_id, inbox_id)
+            return report
+        finally:
+            await runtime.close()
+
+    try:
+        report = asyncio.run(run())
+    except ValueError as exc:
+        raise typer.BadParameter(str(exc)) from exc
+    if json_output:
+        typer.echo(json.dumps(report, indent=2))
+    else:
+        for check in report["checks"]:
+            typer.echo(f"[{check['status']}] {check['name']}: {check['detail']}")
+            if check["action"]:
+                typer.echo("  " + check["action"])
+        if report.get("roundtrip"):
+            typer.echo(report["roundtrip"]["detail"])
+    if not report["ok"]:
+        raise typer.Exit(1)
 
 
 @app.command()
@@ -48,7 +100,8 @@ def keygen() -> None:
 
 
 @org_app.command("create")
-def org_create(name: str, key_name: str = "default", environment: str = "live") -> None:
+def org_create(name: str, key_name: str = "default", environment: str = "live",
+               json_output: bool = typer.Option(False, "--json")) -> None:
     """Create an organization and print an admin API key (shown once)."""
     from agentbox.runtime import Runtime
     from agentbox.services.organizations import create_api_key, create_organization
@@ -60,8 +113,13 @@ def org_create(name: str, key_name: str = "default", environment: str = "live") 
             _, plaintext = await create_api_key(session, org.id, name=key_name, environment=environment)
             await session.commit()
         await rt.close()
-        typer.echo(f"organization_id={org.id}")
-        typer.echo(f"api_key={plaintext}")
+        if json_output:
+            import json
+
+            typer.echo(json.dumps({"organization_id": org.id, "api_key": plaintext}))
+        else:
+            typer.echo(f"organization_id={org.id}")
+            typer.echo(f"api_key={plaintext}")
 
     asyncio.run(_run())
 

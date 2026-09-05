@@ -48,6 +48,9 @@ class Principal:
     api_key_id: str
     scopes: frozenset[str]
     environment: str
+    inbox_ids: tuple[str, ...] | None = None
+    permission_profile: str | None = None
+    allowed_recipients: tuple[str, ...] = ()
 
     def has(self, scope: str) -> bool:
         return "admin" in self.scopes or scope in self.scopes
@@ -69,7 +72,9 @@ async def principal_for_token(session: AsyncSession, token: str, *, rate_limit_p
     if key.last_used_at is None or now - key.last_used_at > timedelta(minutes=1):
         key.last_used_at = now
         await session.commit()
-    return Principal(org.id, key.id, frozenset(key.scopes), key.environment)
+    return Principal(org.id, key.id, frozenset(key.scopes), key.environment,
+                     tuple(key.inbox_ids) if key.inbox_ids is not None else None,
+                     key.permission_profile, tuple(key.allowed_recipients))
 
 
 async def authenticate(request: Request, session: AsyncSession = Depends(get_session)) -> Principal:
@@ -79,6 +84,9 @@ async def authenticate(request: Request, session: AsyncSession = Depends(get_ses
     settings = request.app.state.runtime.settings
     principal = await principal_for_token(session, token, rate_limit_per_minute=settings.api_rate_limit_per_minute)
     request.state.principal = principal
+    from agentbox.security import agent_keys  # noqa: F401 — register the session filter
+
+    session.info["principal"] = principal
     return principal
 
 

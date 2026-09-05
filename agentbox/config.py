@@ -21,6 +21,7 @@ class Settings(BaseSettings):
     smtp_bind_host: str = "0.0.0.0"
     smtp_bind_port: int = 2525
     smtp_hostname: str = "mx.agentbox.local"
+    doctor_smtp_host: str = "localhost"
     smtp_tls_cert: str | None = None
     smtp_tls_key: str | None = None
 
@@ -54,6 +55,12 @@ class Settings(BaseSettings):
     support_email: str = "sales@agentbox.ru"
     github_url: str = "https://github.com/Slimper/agentbox"
     connector_sync_interval_seconds: int = 120
+    # Bring-your-own OAuth applications are available in the open-source edition.
+    m365_client_id: str | None = None
+    m365_client_secret: str | None = None
+    m365_tenant: str = "common"
+    google_client_id: str | None = None
+    google_client_secret: str | None = None
     app_secret_key: str = "CHANGE-ME-generate-with-agentbox-keygen"
     idempotency_ttl_seconds: int = 86400
     worker_concurrency: int = 4

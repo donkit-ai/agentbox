@@ -87,7 +87,8 @@ NAV = [("overview", "Overview", "dashboard", "/dashboard"), ("inboxes", "Inboxes
        ("connectors", "Connectors", "mail", "/dashboard/connectors"), ("domains", "Domains", "globe", "/dashboard/domains"), ("webhooks", "Webhooks", "webhook", "/dashboard/webhooks"),
        ("keys", "API Keys", "key", "/dashboard/api-keys"), ("usage", "Usage & Billing", "chart", "/dashboard/usage"),
        ("policies", "Policies", "shield", "/dashboard/policies"), ("audit", "Audit Log", "scroll", "/dashboard/audit")]
-NAV2 = [("quickstart", "Quickstart", "zap", "/dashboard/quickstart"), ("console", "API Console", "terminal", "/dashboard/console")]
+NAV2 = [("diagnostics", "Diagnostics", "shield", "/dashboard/diagnostics"),
+        ("quickstart", "Quickstart", "zap", "/dashboard/quickstart"), ("console", "API Console", "terminal", "/dashboard/console")]
 
 STATUS_KIND = {
     "active": "success", "suspended": "error", "expired": "default", "deleted": "default", "provisioning": "info",
@@ -192,13 +193,18 @@ async def dash_principal(request: Request, session: AsyncSession = Depends(get_s
     for hook in registry().hooks(runtime.settings, "dashboard.principal"):
         principal = await hook(request, session, runtime)
         if principal is not None:
+            if principal.inbox_ids is not None:
+                raise LoginRequired()
             return principal
     token = request.cookies.get(COOKIE)
     if not token:
         raise LoginRequired()
     try:
         api_key = decrypt_str(runtime.settings.app_secret_key, token)
-        return await principal_for_token(session, api_key)
+        principal = await principal_for_token(session, api_key)
+        if principal.inbox_ids is not None:
+            raise LoginRequired()
+        return principal
     except Exception as e:  # noqa: BLE001
         raise LoginRequired() from e
 
@@ -917,7 +923,9 @@ async def api_keys(request: Request, create: str | None = None, principal: Princ
     rows = list(await session.scalars(select(ApiKey).where(ApiKey.organization_id == principal.organization_id)
                                       .order_by(ApiKey.created_at)))
     ctx = await _shell(request, session, principal, "keys")
-    ctx.update({"keys": rows, "scopes": ALL_SCOPES, "new_key": request.query_params.get("new_key"), "create": create})
+    inboxes = list(await session.scalars(select(Inbox).where(Inbox.organization_id == principal.organization_id,
+                                                            Inbox.deleted_at.is_(None))))
+    ctx.update({"keys": rows, "scopes": ALL_SCOPES, "new_key": None, "create": create, "key_inboxes": inboxes})
     return _render(request, "api_keys.html", ctx)
 
 
@@ -926,15 +934,42 @@ async def api_key_add(request: Request, name: str = Form(...), environment: str 
                       principal: Principal = Depends(dash_principal), session: AsyncSession = Depends(get_session)):
     _scope(principal, "keys:write")
     form = await request.form()
+    from agentbox.security.agent_keys import PROFILES
+
+    profile = str(form.get("permission_profile") or "") or None
     scopes = tuple(s for s in form.getlist("scopes") if s in ALL_SCOPES) or ("admin",)
+    if profile:
+        scopes = PROFILES.get(profile, ())
     if not principal.has("admin") and any(not principal.has(s) for s in scopes):
         raise APIError(403, "forbidden", "Cannot grant scopes you do not hold.")
-    key, plaintext = await create_api_key(session, principal.organization_id, name=name.strip() or "key", scopes=scopes,
-                                          environment="test" if environment == "test" else "live")
+    inbox_ids = [str(i) for i in form.getlist("inbox_ids")] if profile else None
+    for inbox_id in inbox_ids or []:
+        await get_inbox(session, principal.organization_id, inbox_id)
+    try:
+        key, plaintext = await create_api_key(session, principal.organization_id, name=name.strip() or "key", scopes=scopes,
+            environment="test" if environment == "test" else "live", permission_profile=profile, inbox_ids=inbox_ids,
+            allowed_recipients=[a.strip() for a in str(form.get("allowed_recipients", "")).split(",") if a.strip()])
+    except ValueError as exc:
+        raise APIError(422, "validation_error", str(exc)) from exc
     await emit(session, organization_id=principal.organization_id, resource_type="api_key", resource_id=key.id,
                type="api_key.created", payload={"name": key.name, "scopes": key.scopes, "actor": principal.api_key_id})
     await session.commit()
-    return RedirectResponse(f"/dashboard/api-keys?new_key={plaintext}", status_code=303)
+    ctx = await _shell(request, session, principal, "keys")
+    ctx.update({"keys": [key], "scopes": ALL_SCOPES, "new_key": plaintext, "create": False, "key_inboxes": []})
+    response = _render(request, "api_keys.html", ctx)
+    response.headers.update({"Cache-Control": "no-store", "Referrer-Policy": "no-referrer"})
+    return response
+
+
+@router.get("/diagnostics", response_class=HTMLResponse)
+async def diagnostics_page(request: Request, principal: Principal = Depends(dash_principal),
+                             session: AsyncSession = Depends(get_session), runtime: Runtime = Depends(get_runtime)):
+    _scope(principal, "admin")
+    from agentbox.diagnostics import diagnose
+
+    report = await diagnose(runtime, principal.organization_id)
+    ctx = await _shell(request, session, principal, "diagnostics")
+    return _render(request, "diagnostics.html", {**ctx, "report": report})
 
 
 @router.post("/api-keys/{key_id}/revoke")

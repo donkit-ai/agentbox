@@ -17,7 +17,7 @@
 </div>
 {% if connect %}
 {% call m.modal('Connect an existing mailbox', '/dashboard/connectors') %}
-  {% include "ee/connector_oauth.html" ignore missing %}
+  <form method="post" action="/dashboard/connectors/link"><label>Secure browser connection (OAuth or app password)<select class="abx-select" name="provider">{% for key, p in presets.items() %}<option value="{{ key }}">{{ p.label }}</option>{% endfor %}</select></label><button class="ds-button ds-button--primary ds-button--s">Continue in browser</button></form>
   <form method="post" action="/dashboard/connectors" style="display:flex;flex-direction:column;gap:12px">
     <label class="abx-field"><span>Provider</span><select class="abx-select" name="provider">{% for key, p in presets.items() %}<option value="{{ key }}">{{ p.label }}</option>{% endfor %}</select></label>
     <label class="abx-field"><span>Mailbox address</span><input class="abx-input mono" type="email" name="address" placeholder="robot@company.ru" required></label>

@@ -1,6 +1,12 @@
 # Self-hosting AgentBox
 
-One VM (2 vCPU / 4 GB is enough to start) with Docker, a public IPv4 and a domain. Below `DOMAIN=example.com`.
+One VM (2 vCPU / 4 GB is enough to start) with Docker and a domain. Below `DOMAIN=example.com`.
+
+Choose how to receive mail:
+
+- **HTTPS:** point the domain's MX records to Mailgun, SendGrid or Postmark and use
+  [inbound provider webhooks](inbound-webhooks.md). AgentBox needs public HTTPS and a worker; port 25 is unnecessary.
+- **Direct SMTP:** use the DNS records and SMTP edge below. This requires a public IPv4 and inbound port 25.
 
 ## 1. DNS
 
@@ -27,7 +33,8 @@ Inbound port 25 must be open on the VM; with a relay you do not need outbound 25
 
 Put a TLS terminator (Caddy, nginx, Traefik) in front of port 8000 for `mail.example.com`; the SMTP edge listens on
 2525 (map host port 25 to it). Set `AGENTBOX_PUBLIC_BASE_URL=https://mail.example.com` and
-`AGENTBOX_S3_PUBLIC_ENDPOINT` to the URL your users can reach for attachment downloads.
+`AGENTBOX_API_BASE_URL=https://mail.example.com` and `AGENTBOX_S3_PUBLIC_ENDPOINT` to the URL your users can reach
+for attachment downloads.
 
 ## 3. Operate
 

@@ -110,6 +110,11 @@ async def create_outbound_message(
     to = _dedupe(draft.to, set())
     cc = _dedupe(draft.cc, {a["email"] for a in to})
     bcc = _dedupe(draft.bcc, {a["email"] for a in to + cc})
+    principal = session.info.get("principal")
+    if principal and principal.permission_profile == "autonomous":
+        if any(a["email"].lower() not in principal.allowed_recipients for a in to + cc + bcc):
+            raise APIError(403, "recipient_not_allowed",
+                           "Every To, Cc and Bcc recipient must be on this key's allowlist.")
     if not to:
         raise APIError(422, "validation_error", "At least one recipient in 'to' is required.")
     if not draft.text and not draft.html:
@@ -174,10 +179,11 @@ async def create_outbound_message(
         session.add(copy_attachment_reference(a, msg_id))
     await session.flush()
     base = {"inbox_id": inbox.id, "thread_id": thread.id, "message_id": msg_id}
-    if decision.approval_required:
+    if decision.approval_required or (principal and principal.permission_profile == "review"):
         message.status = "pending_approval"
         await emit(session, organization_id=organization_id, resource_type="message", resource_id=msg_id,
-                   type="approval.required", payload={**base, "reasons": decision.approval_reasons,
+                   type="approval.required", payload={**base,
+                                                      "reasons": decision.approval_reasons or ["agent_key_review"],
                                                       "to": to, "subject": message.subject})
         return message
     await emit(session, organization_id=organization_id, resource_type="message", resource_id=msg_id,

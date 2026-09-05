@@ -8,9 +8,10 @@ from datetime import timedelta
 
 import structlog
 from sqlalchemy import delete, update
+from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from agentbox.db.models import Job, utcnow
+from agentbox.db.models import Job, WorkerHeartbeat, utcnow
 from agentbox.jobs.queue import RetryLater, backoff_for, claim, ensure_periodic_jobs, mark_dead, mark_done, reschedule
 from agentbox.runtime import Runtime
 
@@ -83,6 +84,11 @@ class JobWorker:
 
     async def sweep(self) -> None:
         async with self.runtime.db.session() as s:
+            await s.execute(insert(WorkerHeartbeat)
+                .values(worker_id=self.worker_id, kinds=self.kinds, last_seen_at=utcnow())
+                .on_conflict_do_update(index_elements=["worker_id"],
+                                      set_={"last_seen_at": utcnow(), "kinds": self.kinds}))
+            await s.execute(delete(WorkerHeartbeat).where(WorkerHeartbeat.last_seen_at < utcnow() - timedelta(days=1)))
             await s.execute(
                 update(Job).where(Job.status == "running", Job.locked_at < utcnow() - STALE_LOCK)
                 .values(status="pending", locked_at=None, locked_by=None, updated_at=utcnow())

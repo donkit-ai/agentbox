@@ -17,6 +17,7 @@ from agentbox.api.routers import (
     attachments,
     domains,
     events,
+    inbound,
     inboxes,
     me,
     messages,
@@ -27,9 +28,11 @@ from agentbox.api.routers import (
     threads,
     usage,
     webhooks,
+    workflows,
 )
 from agentbox.config import get_settings
 from agentbox.connectors.dashboard import router as connectors_dashboard_router
+from agentbox.connectors.links import router as connection_links_router
 from agentbox.connectors.router import router as connections_router
 from agentbox.dashboard.router import register_dashboard_handlers
 from agentbox.dashboard.router import router as dashboard_router
@@ -86,11 +89,14 @@ def create_app(runtime: Runtime | None = None) -> FastAPI:
     app.include_router(messages.router)
     app.include_router(threads.router)
     app.include_router(events.router)
+    app.include_router(workflows.router)
     app.include_router(domains.router)
+    app.include_router(inbound.router)
     for r in (policies, suppressions, approvals, providers, provider_events, analytics, usage, api_keys):
         app.include_router(r.router)
 
     app.include_router(connections_router)
+    app.include_router(connection_links_router)
     app.include_router(dashboard_router)
     app.include_router(connectors_dashboard_router)
     settings = runtime.settings if runtime is not None else get_settings()

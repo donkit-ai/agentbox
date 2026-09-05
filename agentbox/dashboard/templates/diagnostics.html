@@ -1,0 +1,14 @@
+{% extends "base.html" %}{% block title %}Diagnostics{% endblock %}
+{% block content %}
+{{ m.page_head('Diagnostics', 'Read-only checks. No email is sent by opening this page.') }}
+{% for check in report.checks %}
+<section class="ds-card ds-card--m abx-card">
+  <h3>{{ check.name }} · {{ check.status }}</h3><p>{{ check.detail }}</p>
+  {% if check.action %}<p>{{ check.action }}</p>{% endif %}
+</section>
+{% endfor %}
+<section class="ds-card ds-card--m abx-card"><h3>What send statuses mean</h3>
+{% for status, meaning in report.delivery_states.items() %}<p><code>{{ status }}</code> — {{ meaning }}</p>{% endfor %}
+<p>For a local-only end-to-end test: <code>agentbox doctor --roundtrip --organization-id ORG_ID --inbox-id INBOX_ID</code>.</p>
+</section>
+{% endblock %}

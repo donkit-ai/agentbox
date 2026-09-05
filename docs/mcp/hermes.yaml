@@ -1,0 +1,10 @@
+mcp_servers:
+  agentbox:
+    command: uvx
+    args:
+      - --from
+      - agentbox-sdk[mcp] @ git+https://github.com/Slimper/agentbox@v0.2.0#subdirectory=sdk/python
+      - agentbox-mcp
+    env:
+      AGENTBOX_API_URL: http://localhost:8000
+      AGENTBOX_API_KEY: "${AGENTBOX_API_KEY}"

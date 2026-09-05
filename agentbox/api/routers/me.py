@@ -9,4 +9,6 @@ router = APIRouter(prefix="/v1", tags=["me"])
 @router.get("/me", response_model=MeOut)
 async def me(principal: Principal = Depends(authenticate)) -> MeOut:
     return MeOut(organization_id=principal.organization_id, api_key_id=principal.api_key_id,
-                 scopes=sorted(principal.scopes), environment=principal.environment)
+                 scopes=sorted(principal.scopes), environment=principal.environment,
+                 inbox_ids=list(principal.inbox_ids) if principal.inbox_ids is not None else None,
+                 permission_profile=principal.permission_profile, allowed_recipients=list(principal.allowed_recipients))

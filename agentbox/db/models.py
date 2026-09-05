@@ -60,6 +60,9 @@ class ApiKey(Base):
     key_prefix: Mapped[str] = mapped_column(String(16), nullable=False)
     key_hash: Mapped[str] = mapped_column(String(64), unique=True, nullable=False)
     scopes: Mapped[list] = mapped_column(JSONB, default=list, nullable=False)
+    inbox_ids: Mapped[list | None] = mapped_column(JSONB)
+    permission_profile: Mapped[str | None] = mapped_column(String(30))
+    allowed_recipients: Mapped[list] = mapped_column(JSONB, default=list, nullable=False)
     environment: Mapped[str] = mapped_column(String(10), default="live", nullable=False)
     last_used_at: Mapped[datetime | None] = _ts()
     revoked_at: Mapped[datetime | None] = _ts()
@@ -163,6 +166,7 @@ class Attachment(Base):
     id: Mapped[str] = mapped_column(String(40), primary_key=True)
     organization_id: Mapped[str] = mapped_column(ForeignKey("organizations.id"), nullable=False, index=True)
     message_id: Mapped[str | None] = mapped_column(ForeignKey("messages.id"), index=True)
+    uploaded_by_key_id: Mapped[str | None] = mapped_column(String(40))
     filename: Mapped[str] = mapped_column(String(512), nullable=False)
     content_type: Mapped[str] = mapped_column(String(255), nullable=False)
     size_bytes: Mapped[int] = mapped_column(BigInteger, nullable=False)
@@ -189,6 +193,48 @@ class Event(Base):
     type: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
     payload: Mapped[dict] = mapped_column(JSONB, default=dict, nullable=False)
     created_at: Mapped[datetime] = _ts(default=utcnow, nullable=False)
+
+
+class WorkerHeartbeat(Base):
+    __tablename__ = "worker_heartbeats"
+    worker_id: Mapped[str] = mapped_column(String(200), primary_key=True)
+    kinds: Mapped[list] = mapped_column(JSONB, default=list, nullable=False)
+    last_seen_at: Mapped[datetime] = _ts(default=utcnow, nullable=False)
+
+
+class ConnectionLink(Base):
+    __tablename__ = "connection_links"
+    id: Mapped[str] = mapped_column(String(40), primary_key=True)
+    organization_id: Mapped[str] = mapped_column(ForeignKey("organizations.id"), nullable=False)
+    token_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    provider: Mapped[str] = mapped_column(String(30), nullable=False)
+    state_encrypted: Mapped[str] = mapped_column(Text, nullable=False)
+    status: Mapped[str] = mapped_column(String(20), default="pending", nullable=False)
+    inbox_id: Mapped[str | None] = mapped_column(ForeignKey("inboxes.id"))
+    expires_at: Mapped[datetime] = _ts(nullable=False)
+    created_at: Mapped[datetime] = _ts(default=utcnow, nullable=False)
+
+
+class ReplyWait(Base):
+    __tablename__ = "reply_waits"
+    message_id: Mapped[str] = mapped_column(ForeignKey("messages.id", ondelete="CASCADE"), primary_key=True)
+    organization_id: Mapped[str] = mapped_column(ForeignKey("organizations.id"), nullable=False)
+    inbox_id: Mapped[str] = mapped_column(ForeignKey("inboxes.id"), nullable=False)
+    status: Mapped[str] = mapped_column(String(20), default="pending", nullable=False)
+    reply_message_id: Mapped[str | None] = mapped_column(ForeignKey("messages.id", ondelete="SET NULL"))
+    expires_at: Mapped[datetime] = _ts(nullable=False)
+    created_at: Mapped[datetime] = _ts(default=utcnow, nullable=False)
+
+
+class EventReceipt(Base):
+    __tablename__ = "event_receipts"
+    organization_id: Mapped[str] = mapped_column(ForeignKey("organizations.id"), primary_key=True)
+    consumer: Mapped[str] = mapped_column(String(100), primary_key=True)
+    event_id: Mapped[str] = mapped_column(ForeignKey("events.id", ondelete="CASCADE"), primary_key=True)
+    api_key_id: Mapped[str] = mapped_column(String(40), nullable=False)
+    lease_token: Mapped[str] = mapped_column(String(64), nullable=False)
+    leased_until: Mapped[datetime] = _ts(nullable=False)
+    acknowledged_at: Mapped[datetime | None] = _ts()
 
 
 class Webhook(Timestamped, Base):
@@ -290,8 +336,20 @@ class Suppression(Base):
     expires_at: Mapped[datetime | None] = _ts()
 
 
+class InboundEndpoint(Timestamped, Base):
+    """Organization-scoped credentials for an inbound email provider."""
+
+    __tablename__ = "inbound_endpoints"
+    id: Mapped[str] = mapped_column(String(40), primary_key=True)
+    organization_id: Mapped[str] = mapped_column(ForeignKey("organizations.id"), nullable=False, index=True)
+    provider: Mapped[str] = mapped_column(String(30), nullable=False)
+    name: Mapped[str] = mapped_column(String(100), nullable=False)
+    config_encrypted: Mapped[str] = mapped_column(Text, nullable=False)
+
+
 class InboundIngest(Base):
     __tablename__ = "inbound_ingests"
+    __table_args__ = (UniqueConstraint("dedupe_key", name="uq_inbound_ingests_dedupe_key"),)
     id: Mapped[str] = mapped_column(String(40), primary_key=True)
     organization_id: Mapped[str] = mapped_column(ForeignKey("organizations.id"), nullable=False, index=True)
     kind: Mapped[str] = mapped_column(String(20), nullable=False)
@@ -306,6 +364,7 @@ class InboundIngest(Base):
     error: Mapped[str | None] = mapped_column(Text)
     created_at: Mapped[datetime] = _ts(default=utcnow, nullable=False)
     processed_at: Mapped[datetime | None] = _ts()
+    dedupe_key: Mapped[str | None] = mapped_column(String(64))
 
 
 class IdempotencyKey(Base):

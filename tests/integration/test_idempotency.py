@@ -33,3 +33,14 @@ async def test_concurrent_duplicates_serialize(client, org):
     codes = sorted(r.status_code for r in results)
     assert codes == [201] * 5
     assert len({r.json()["id"] for r in results}) == 1
+
+
+async def test_abandoned_reservation_recovers_after_process_exit(client, org, runtime):
+    from agentbox.api.idempotency import _begin, request_hash
+
+    # Simulate an abruptly terminated process: it reserved a key but committed neither resource nor receipt.
+    await _begin(runtime, org.id, "crashed", "POST /v1/inboxes", request_hash(b'{"username":"recover"}'))
+    headers = {**org.headers, "Idempotency-Key": "crashed"}
+    r = await client.post("/v1/inboxes", headers=headers, json={"username": "recover"})
+    assert r.status_code == 201, r.text
+    assert (await client.post("/v1/inboxes", headers=headers, json={"username": "recover"})).json() == r.json()

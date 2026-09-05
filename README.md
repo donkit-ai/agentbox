@@ -6,30 +6,42 @@ providers; operated from a console; driven from Python, TypeScript or MCP. Apach
 
 | Area | Highlights |
 |---|---|
-| Core | inboxes (incl. ephemeral `ttl`) or connected existing mailboxes (Gmail, Yandex 360, M365, any IMAP), send / receive / reply / forward, thread resolution, attachments, signed webhooks with retries, idempotency, long-poll `wait=`, Postgres-backed job queue, own SMTP edge, VERP bounce handling |
+| Core | inboxes (incl. ephemeral `ttl`) or connected existing mailboxes (Gmail, Yandex 360, M365, any IMAP), send / receive / reply / forward, thread resolution, attachments, signed webhooks with retries, idempotency, long-poll `wait=`, Postgres-backed job queue, own SMTP edge or inbound Mailgun / SendGrid / Postmark webhooks, VERP bounce handling on the SMTP edge |
 | Domains | custom domain onboarding, DNS records to publish, background verification (ownership, MX, SPF, DKIM, DMARC) |
 | Governance | org + inbox policies (allow/block lists, rate limits, loop protection, attachment rules), approval gates, suppressions, per-key API rate limit, audit events with NDJSON export |
 | Delivery | provider accounts (SMTP relay, SendGrid, Unisender Go), routing rules, provider event webhooks, delivery analytics |
 | SDKs | Python (`sdk/python`), TypeScript (`sdk/typescript`), MCP server (`agentbox-mcp`) |
 | Console | `/dashboard`: overview, thread viewer, domains, webhooks, keys, usage, policies, audit, API console |
 
-A hosted edition with sign-up, teams, billing, SSO/SCIM and mailbox connectors is built on top of this core through
+A hosted edition with sign-up, teams, billing and SSO/SCIM is built on top of this core through
 `agentbox/extensions.py`; the core never depends on it.
 
-## Give your agent a mailbox in two minutes
+## Quickstart for agent builders
+
+From this checkout, with Docker/Compose and uv installed:
+
+    uv run agentbox init --build --mode demo
+
+This starts an isolated stack, generates secrets and an inbox-scoped key, and verifies a local email roundtrip.
+Mailpit captures demo mail; it does not deliver to the internet. Use `--mode mailbox --provider gmail` to connect
+real mail in the browser instead. See [the full guide](docs/agents.md) for client-specific configs and examples.
 
 Any MCP-capable agent (OpenClaw, Hermes Agent, Claude Desktop, Cursor, Codex) gets email tools with one config entry,
 no install step:
 
     "agentbox": { "command": "uvx",
-                  "args": ["--from", "agentbox-sdk[mcp] @ git+https://github.com/Slimper/agentbox#subdirectory=sdk/python", "agentbox-mcp"],
+                  "args": ["--from", "/ABSOLUTE/PATH/agentbox/sdk/python[mcp]", "agentbox-mcp"],
                   "env": { "AGENTBOX_API_URL": "http://localhost:8000", "AGENTBOX_API_KEY": "ab_live_..." } }
 
-Then either create a managed address or connect the user's own Gmail / Yandex / Microsoft 365 / IMAP mailbox with an
-app password (`connect_mailbox`, or `POST /v1/connections`): no domain, DNS or port 25 needed. `docs/agents.md` has
+This checkout uses the local SDK path until v0.2.0 is released; the guide includes pinned public-install templates.
+An operator can connect the user's own Gmail / Yandex / Microsoft 365 / IMAP mailbox with a
+browser connection link (OAuth or an eligible app password): no domain, DNS or port 25 needed. Microsoft 365
+requires OAuth. `docs/agents.md` has
 the details and `skills/agentbox/SKILL.md` is a drop-in skill for OpenClaw and Hermes.
 
-## Run locally
+## Run services manually (advanced)
+
+Keep the admin key below for the human operator; issue an inbox-scoped agent preset from the console.
 
     cp .env.example .env
     make up                      # postgres (:5434), minio (:9010), mailpit (:1025 / :8025)
@@ -48,25 +60,28 @@ Everything in Docker:
     # http://localhost:8000/dashboard  → log in with the API key
 
 Production self-hosting (DNS records, TLS, relay): `docs/self-host.md`.
+To receive on your own domain over HTTPS without port 25, follow [Inbound provider webhooks](docs/inbound-webhooks.md).
 
 ## Hello world
 
-    export KEY=ab_live_...
-    curl -s localhost:8000/v1/inboxes -H "Authorization: Bearer $KEY" -H 'Content-Type: application/json' \
-      -d '{"username":"demo-agent"}'
-    curl -s localhost:8000/v1/inboxes/$INBOX/messages -H "Authorization: Bearer $KEY" \
+Load the wizard's `agent.env` into the process environment without printing it. The inbox already exists:
+
+    curl -s "$AGENTBOX_API_URL/v1/inboxes/$AGENTBOX_INBOX_ID/messages" -H "Authorization: Bearer $AGENTBOX_API_KEY" \
       -H 'Content-Type: application/json' -H 'Idempotency-Key: first-hello' \
-      -d '{"to":["you@example.com"],"subject":"Hello","text":"Sent by an agent"}'
-    curl -s "localhost:8000/v1/inboxes/$INBOX/messages?direction=inbound&wait=30" -H "Authorization: Bearer $KEY"
+      -d '{"to":["supplier@example.com"],"subject":"Hello","text":"Local demo"}'
+
+To wait for the reply across process restarts, start `/v1/messages/MESSAGE_ID/reply-wait` and read it later.
+See the [supplier example](examples/README.md) for a complete send, retry, fixture reply and resume workflow.
 
 Python:
 
     pip install ./sdk/python        # agentbox-sdk
+    import os
     from agentbox_sdk import AgentBox
-    mail = AgentBox("ab_live_...", base_url="http://localhost:8000")
-    inbox = mail.inboxes.create("procurement-agent")
-    mail.messages.send(inbox["id"], to=["sales@supplier.ru"], subject="Запрос КП", text="Пришлите КП.")
-    reply = mail.messages.wait_for(inbox["id"], timeout=300)
+    with AgentBox(os.environ["AGENTBOX_API_KEY"], base_url=os.environ["AGENTBOX_API_URL"]) as mail:
+        sent = mail.messages.send(os.environ["AGENTBOX_INBOX_ID"], to="supplier@example.com",
+            subject="Quote", text="Please quote 100 units.", idempotency_key="quote-order-123")
+        waiting = mail.messages.start_reply_wait(sent["id"])
 
 TypeScript: `cd sdk/typescript && npm install && npm run build`, then `new AgentBox({ apiKey, baseUrl })`.
 MCP: `pip install './sdk/python[mcp]'` and run `agentbox-mcp` with `AGENTBOX_API_KEY` / `AGENTBOX_API_URL`.
@@ -77,6 +92,9 @@ MCP: `pip install './sdk/python[mcp]'` and run `agentbox-mcp` with `AGENTBOX_API
 |---|---|
 | Inboxes | `POST/GET /v1/inboxes`, `GET /v1/inboxes/{id}`, `POST .../disable`, `POST .../enable`, `DELETE`, `GET/PUT/DELETE .../policy` |
 | Connections | `GET /v1/connections/presets`, `POST/GET /v1/connections`, `GET /v1/connections/{id}`, `POST .../sync`, `POST .../pause`, `POST .../resume`, `DELETE` (existing IMAP/SMTP mailbox as an inbox) |
+| Browser connection | `POST /v1/connection-links`, `GET /v1/connection-links/{id}`; credentials/OAuth stay in the browser |
+| Agent workflows | `POST/GET /v1/messages/{id}/reply-wait`, `POST /v1/consumers/{name}/claim`, `POST .../events/{id}/ack` |
+| Inbound providers | `POST/GET /v1/inbound-endpoints`, `DELETE /v1/inbound-endpoints/{id}`, authenticated provider callbacks at `POST /v1/inbound/{provider}/{id}` (Mailgun: append `/mime`) |
 | Messages | `POST /v1/inboxes/{id}/messages`, `GET /v1/inboxes/{id}/messages` (filters + `wait=`), `GET /v1/messages/{id}`, `POST .../reply`, `POST .../forward`, `POST .../approve`, `POST .../reject`, `GET /v1/approvals` |
 | Threads | `GET /v1/inboxes/{id}/threads`, `GET /v1/threads/{id}` |
 | Attachments | `POST /v1/attachments/uploads`, `GET /v1/attachments/{id}`, `GET .../download`, `GET /v1/messages/{id}/attachments` |

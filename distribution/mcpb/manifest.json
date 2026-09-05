@@ -1,0 +1,25 @@
+{
+  "manifest_version": "0.3",
+  "name": "agentbox",
+  "display_name": "AgentBox Email",
+  "version": "0.2.0",
+  "description": "Email for agents with browser mailbox connections, scoped permissions and persistent reply waits.",
+  "author": {"name": "AgentBox", "url": "https://github.com/Slimper/agentbox"},
+  "license": "Apache-2.0",
+  "repository": {"type": "git", "url": "https://github.com/Slimper/agentbox"},
+  "privacy_policies": ["https://github.com/Slimper/agentbox/blob/main/docs/data-handling.md"],
+  "server": {
+    "type": "python",
+    "entry_point": "server.py",
+    "mcp_config": {
+      "command": "uv",
+      "args": ["run", "--no-project", "--with", "agentbox-sdk[mcp]==0.2.0", "${__dirname}/server.py"],
+      "env": {"AGENTBOX_API_KEY": "${user_config.api_key}", "AGENTBOX_API_URL": "${user_config.api_url}"}
+    }
+  },
+  "tools_generated": true,
+  "user_config": {
+    "api_key": {"type": "string", "title": "Inbox-scoped API key", "description": "A read-only, review or allowlisted autonomous key issued by your AgentBox operator. Never use a mailbox password.", "required": true, "sensitive": true},
+    "api_url": {"type": "string", "title": "AgentBox API URL", "description": "The base URL of your AgentBox server. Use HTTPS except for a local demo.", "required": true, "default": "http://localhost:8000"}
+  }
+}

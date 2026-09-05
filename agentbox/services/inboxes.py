@@ -26,6 +26,7 @@ async def get_domain_for_org(session: AsyncSession, organization_id: str, domain
     return await session.scalar(
         select(Domain).where(
             Domain.domain == domain_name.lower(), Domain.status == "active", Domain.deleted_at.is_(None),
+            Domain.type != "customer_external",
             or_(Domain.organization_id.is_(None), Domain.organization_id == organization_id),
         )
     )
