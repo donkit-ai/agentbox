@@ -10,3 +10,9 @@
 agentbox-local
 tests
 sdk/typescript
+
+**/*.env
+**/.env
+**/.env.*
+**/operator.json
+**/agent.env

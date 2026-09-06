@@ -7,7 +7,8 @@ from uuid import uuid4
 
 from sqlalchemy import func, select, text
 
-from agentbox.db.models import MailboxConnection, Message, WorkerHeartbeat, utcnow
+from agentbox.db.models import Job, MailboxConnection, Message, WorkerHeartbeat, utcnow
+from agentbox.extensions import registry
 
 
 async def diagnose(runtime, organization_id=None):
@@ -35,6 +36,19 @@ async def diagnose(runtime, organization_id=None):
                     f"{len(workers)} live worker(s); missing handlers: {', '.join(missing) or 'none'}.",
                     "Run agentbox worker (or docker compose up -d worker)." if missing else "",
                 )
+                jobs = select(Job).where(Job.status.in_(["pending", "dead"]))
+                if organization_id:
+                    jobs = jobs.where(Job.payload["organization_id"].astext == organization_id)
+                delayed = 0
+                dead = 0
+                for job in await session.scalars(jobs):
+                    dead += job.status == "dead"
+                    delayed += job.status == "pending" and job.run_at < utcnow() - timedelta(minutes=5)
+                add("job_queue", "warning" if delayed or dead else "ok",
+                    f"{delayed} overdue job(s); {dead} dead job(s).",
+                    "Inspect failed jobs and provider availability before retrying." if delayed or dead else "")
+                for hook in registry().hooks(runtime.settings, "diagnostics.checks"):
+                    checks.extend(await hook(session, runtime, organization_id))
                 latest = select(func.max(Message.created_at)).where(Message.direction == "inbound")
                 connections = select(MailboxConnection).where(MailboxConnection.status != "disconnected")
                 if organization_id:
@@ -55,7 +69,7 @@ async def diagnose(runtime, organization_id=None):
                         status,
                         f"{conn.address}: {conn.status}; last sync {conn.last_sync_at or 'never'}; "
                         f"login/sync error: {bool(conn.last_error)}.",
-                        "Check app password/OAuth consent, IMAP access and connection status in Connectors."
+                        "Check provider authorization and connection status in Connectors."
                         if status != "ok"
                         else "",
                     )

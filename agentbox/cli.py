@@ -19,12 +19,14 @@ def init(
     directory: Path = Path("agentbox-local"), mode: str = "demo", provider: str = "gmail",
     image: str = "ghcr.io/slimper/agentbox:0.2.0", build: bool = False,
     port: int = 8000, name: str = "My agents", domain: str = "",
+    config: Path | None = typer.Option(None, help="Private .env with OAuth or mail delivery settings."),
+    app_passwords: bool = typer.Option(False, help="Explicitly enable the advanced IMAP/SMTP app-password form."),
 ) -> None:
     """Start an isolated Docker stack: --mode demo | mailbox | domain. Existing configuration is never overwritten."""
     from agentbox.onboarding import initialize
 
     initialize(directory=directory, mode=mode, provider=provider, image=image,
-               build=build, port=port, name=name, domain=domain)
+               build=build, port=port, name=name, domain=domain, config=config, app_passwords=app_passwords)
 
 
 @app.command()

@@ -1,12 +1,13 @@
 import asyncio
 import ssl
 import traceback
+from pathlib import Path
 
 import structlog
 from aiosmtpd.smtp import SMTP, Envelope, Session
 from sqlalchemy import select
 
-from agentbox.db.models import InboundIngest, Inbox, Message
+from agentbox.db.models import InboundIngest, Inbox, Message, Organization, utcnow
 from agentbox.domain.addresses import split_address
 from agentbox.domain.ids import new_id
 from agentbox.governance.policies import get_effective_policy
@@ -31,12 +32,22 @@ class InboundHandler:
                 )
                 if message is None:
                     return None
+                inbox = await s.get(Inbox, message.inbox_id)
+                org = await s.get(Organization, message.organization_id)
+                if inbox is None or inbox.address.rpartition("@")[2] != domain:
+                    return None
+                if org is None or org.status != "active":
+                    return "disabled"
                 return {"kind": "bounce", "organization_id": message.organization_id, "inbox_id": message.inbox_id,
                         "bounce_message_id": message.id}
             inbox = await s.scalar(select(Inbox).where(Inbox.address == address, Inbox.deleted_at.is_(None)))
             if inbox is None:
                 return None
-            if inbox.status != "active":
+            if inbox.provider_mode != "managed":
+                return None
+            org = await s.get(Organization, inbox.organization_id)
+            if (org is None or org.status != "active" or inbox.status != "active"
+                    or (inbox.expires_at and inbox.expires_at <= utcnow())):
                 return "disabled"
             policy = await get_effective_policy(s, inbox.organization_id, inbox.id)
             if not policy.get("receive_enabled", True):
@@ -90,24 +101,48 @@ class InboundHandler:
         return f"250 2.0.0 Queued as {last_id}"
 
 
-def _tls_context(runtime: Runtime) -> ssl.SSLContext | None:
-    s = runtime.settings
-    if not (s.smtp_tls_cert and s.smtp_tls_key):
-        return None
-    ctx = ssl.create_default_context(ssl.Purpose.CLIENT_AUTH)
-    ctx.load_cert_chain(s.smtp_tls_cert, s.smtp_tls_key)
-    return ctx
+class TLSCertificates:
+    """New connections see renewed certificates; existing TLS sessions keep their context."""
+    def __init__(self, settings):
+        self.settings, self.context, self.version = settings, None, None
+
+    def get(self):
+        s = self.settings
+        if not s.smtp_tls_cert and not s.smtp_tls_key:
+            return None
+        if not s.smtp_tls_cert or not s.smtp_tls_key:
+            raise ValueError("Both SMTP TLS certificate and key are required")
+        try:
+            cert = Path(s.smtp_tls_cert)
+            key = Path(s.smtp_tls_key)
+            # Resolve an atomic certificate-generation symlink once for both files.
+            if cert.parent == key.parent:
+                directory = cert.parent.resolve()
+                cert, key = directory / cert.name, directory / key.name
+            version = (str(cert), cert.stat().st_mtime_ns, str(key), key.stat().st_mtime_ns)
+            if version != self.version:
+                context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+                context.minimum_version = ssl.TLSVersion.TLSv1_2
+                context.load_cert_chain(cert, key)
+                self.context, self.version = context, version
+                log.info("smtp_tls_certificate_loaded")
+        except (OSError, ssl.SSLError):
+            if self.context is None:
+                raise
+            log.warning("smtp_tls_reload_failed_keeping_previous_certificate")
+        return self.context
 
 
 async def start_smtp_server(runtime: Runtime, host: str | None = None, port: int | None = None) -> asyncio.Server:
     handler = InboundHandler(runtime)
     loop = asyncio.get_running_loop()
-    tls = _tls_context(runtime)
+    certificates = TLSCertificates(runtime.settings)
+    certificates.get()  # Fail clearly at startup when explicitly configured files are unavailable.
     settings = runtime.settings
 
     def factory() -> SMTP:
         return SMTP(handler, hostname=settings.smtp_hostname, data_size_limit=settings.max_inbound_bytes,
-                    tls_context=tls, enable_SMTPUTF8=True, loop=loop)
+                    tls_context=certificates.get(), enable_SMTPUTF8=True, loop=loop)
 
     server = await loop.create_server(factory, host or settings.smtp_bind_host, port or settings.smtp_bind_port)
     log.info("smtp_edge_listening", host=host or settings.smtp_bind_host, port=port or settings.smtp_bind_port)

@@ -16,12 +16,15 @@ class Settings(BaseSettings):
     s3_region: str = "us-east-1"
 
     managed_domain: str = "agentbox.local"
+    # Operator enables this only after verifying real inbound and outbound delivery.
+    managed_delivery_enabled: bool = False
     api_base_url: str = "http://localhost:8000"
 
     smtp_bind_host: str = "0.0.0.0"
     smtp_bind_port: int = 2525
     smtp_hostname: str = "mx.agentbox.local"
     doctor_smtp_host: str = "localhost"
+    max_outbound_recipients: int = 50
     smtp_tls_cert: str | None = None
     smtp_tls_key: str | None = None
 
@@ -61,6 +64,8 @@ class Settings(BaseSettings):
     m365_tenant: str = "common"
     google_client_id: str | None = None
     google_client_secret: str | None = None
+    # Password connectors are an advanced, explicitly enabled self-hosting option.
+    allow_app_password_connections: bool = False
     app_secret_key: str = "CHANGE-ME-generate-with-agentbox-keygen"
     idempotency_ttl_seconds: int = 86400
     worker_concurrency: int = 4

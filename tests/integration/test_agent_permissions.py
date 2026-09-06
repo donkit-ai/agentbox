@@ -38,7 +38,8 @@ async def test_agent_key_isolation_and_send_policy(client, org, profile):
         assert (await client.post(f"/v1/messages/{sent.json()['id']}/approve", headers=org.headers)).json()["status"] == "queued"
 
 
-async def test_external_domains_are_shared_but_not_managed(client, org, make_org):
+async def test_external_domains_are_shared_but_not_managed(client, org, make_org, runtime, monkeypatch):
+    monkeypatch.setattr(runtime.settings, "allow_app_password_connections", True)
     other = await make_org()
     for auth, address in [(org.headers, "one@gmail.com"), (other.headers, "two@gmail.com")]:
         r = await client.post("/v1/connections", headers=auth,

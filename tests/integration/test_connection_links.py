@@ -2,6 +2,8 @@ import re
 from datetime import timedelta
 from urllib.parse import parse_qs, urlsplit
 
+import httpx
+
 from agentbox.connectors import oauth, service
 from agentbox.db.models import ConnectionLink, utcnow
 
@@ -17,7 +19,8 @@ class ValidMailbox:
         pass
 
 
-async def test_browser_connection_never_returns_password_and_is_single_use(client, org, monkeypatch):
+async def test_browser_connection_never_returns_password_and_is_single_use(client, org, runtime, monkeypatch):
+    monkeypatch.setattr(runtime.settings, "allow_app_password_connections", True)
     monkeypatch.setattr(service, "_client_factory", ValidMailbox)
     created = await client.post("/v1/connection-links", headers=org.headers, json={"provider": "gmail"})
     assert created.status_code == 201, created.text
@@ -26,7 +29,7 @@ async def test_browser_connection_never_returns_password_and_is_single_use(clien
     assert parsed.fragment and not parsed.query
     assert "private-app-password" not in str(link)
     initial = await client.get(parsed.path)
-    assert "location.hash" in initial.text and "no-referrer" == initial.headers["Referrer-Policy"]
+    assert "/dashboard/static/connect.js" in initial.text and "no-referrer" == initial.headers["Referrer-Policy"]
     assert (await client.post(parsed.path + "/session", json={"token": "bad-token-of-adequate-length"})).status_code == 404
     response = await client.post(parsed.path + "/session", json={"token": parsed.fragment})
     assert response.status_code == 204 and "HttpOnly" in response.headers["set-cookie"]
@@ -36,7 +39,7 @@ async def test_browser_connection_never_returns_password_and_is_single_use(clien
     assert (await client.post(parsed.path + "/password", data=data)).status_code == 403
     response = await client.post(parsed.path + "/password", data={**data, "csrf": csrf})
     assert response.status_code == 200, response.text
-    assert "Connected" in response.text and "private-app-password" not in response.text
+    assert "Почта подключена" in response.text and "private-app-password" not in response.text
     status = (await client.get(f"/v1/connection-links/{link['id']}", headers=org.headers)).json()
     assert status["status"] == "connected" and status["inbox_id"]
     conn = (await client.get("/v1/connections", headers=org.headers)).json()["data"][0]
@@ -72,20 +75,17 @@ async def test_oauth_callback_requires_browser_state_and_is_single_use(client, o
     async def exchange(http, settings, provider, code, redirect_uri, verifier, nonce):
         assert provider == "gmail" and code == "test-code" and verifier and nonce
         return {"auth": "oauth", "oauth_provider": "gmail", "email": "oauth-browser@gmail.com",
-                "access_token": "private-access", "refresh_token": "private-refresh", "expires_at": 9999999999}
+                "access_token": "private-access", "refresh_token": "private-refresh", "expires_at": 9999999999,
+                "transport": "gmail_api", "scopes": sorted(oauth.GMAIL_SCOPES)}
 
-    class OAuthMailbox:
-        def __init__(self, config):
-            assert config["auth"] == "oauth" and config["access_token"] == "private-access"
-
-        def latest_uid(self):
-            return 73
-
-        def close(self):
-            pass
+    def gmail(request):
+        assert request.url.path.endswith("/profile")
+        assert request.headers["Authorization"] == "Bearer private-access"
+        return httpx.Response(200, json={"emailAddress": "oauth-browser@gmail.com", "historyId": "73"})
 
     monkeypatch.setattr(oauth, "exchange_code", exchange)
-    monkeypatch.setattr(service, "_client_factory", OAuthMailbox)
+    http = httpx.AsyncClient(transport=httpx.MockTransport(gmail))
+    monkeypatch.setattr(runtime, "http", http)
     link = (await client.post("/v1/connection-links", headers=org.headers, json={"provider": "gmail"})).json()
     parsed = urlsplit(link["url"])
     await client.post(parsed.path + "/session", json={"token": parsed.fragment})
@@ -103,9 +103,11 @@ async def test_oauth_callback_requires_browser_state_and_is_single_use(client, o
     bad = await client.get(callback, params={"state": link["id"] + ".wrong", "code": "test-code"})
     assert bad.status_code == 403
     connected = await client.get(callback, params={"state": state, "code": "test-code"})
-    assert connected.status_code == 200 and "Connected" in connected.text
+    assert connected.status_code == 200 and "Почта подключена" in connected.text
     assert "private-access" not in connected.text and "private-refresh" not in connected.text
     connections = (await client.get("/v1/connections", headers=org.headers)).json()["data"]
-    assert connections[0]["last_uid"] == 73
+    assert connections[0]["transport"] == "gmail_api" and connections[0]["imap_host"] is None
     assert "private-access" not in str(connections) and "private-refresh" not in str(connections)
     assert (await client.get(callback, params={"state": state, "code": "test-code"})).status_code == 410
+
+    await http.aclose()

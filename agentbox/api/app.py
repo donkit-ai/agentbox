@@ -1,7 +1,9 @@
+import asyncio
 from contextlib import asynccontextmanager
 from pathlib import Path
 
 from fastapi import FastAPI, Request
+from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
 from jinja2 import ChoiceLoader, FileSystemLoader
 from sqlalchemy import text
@@ -9,6 +11,7 @@ from starlette.datastructures import MutableHeaders
 from ulid import ULID
 
 from agentbox import __version__
+from agentbox.api.browser_security import BrowserOriginMiddleware
 from agentbox.api.errors import register_error_handlers
 from agentbox.api.routers import (
     analytics,
@@ -100,6 +103,7 @@ def create_app(runtime: Runtime | None = None) -> FastAPI:
     app.include_router(dashboard_router)
     app.include_router(connectors_dashboard_router)
     settings = runtime.settings if runtime is not None else get_settings()
+    app.add_middleware(BrowserOriginMiddleware, public_base_url=settings.public_base_url)
     for ext_router in registry().routers(settings):
         app.include_router(ext_router)
     template_dirs = [*_TEMPLATE_DIRS, *registry().template_dirs(settings)]
@@ -113,8 +117,15 @@ def create_app(runtime: Runtime | None = None) -> FastAPI:
 
     @app.get("/readyz", include_in_schema=False)
     async def readyz(request: Request):
-        async with request.app.state.runtime.db.session() as session:
-            await session.execute(text("SELECT 1"))
+        runtime = request.app.state.runtime
+        try:
+            async with asyncio.timeout(5):
+                async with runtime.db.session() as session:
+                    await session.execute(text("SELECT 1"))
+                async with runtime.storage._client() as storage:
+                    await storage.head_bucket(Bucket=runtime.storage.bucket)
+        except Exception:
+            return JSONResponse({"ok": False}, status_code=503)
         return {"ok": True}
 
     return app

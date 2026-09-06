@@ -16,3 +16,10 @@ sdk/typescript/dist/
 console-*.png
 .playwright-mcp/
 landing*.png
+
+# Private connection settings and credentials from any quickstart directory.
+*.env
+**/operator.json
+**/agent.env
+.env.*
+!.env.example

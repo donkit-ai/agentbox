@@ -28,7 +28,8 @@ class FakeImap:
         pass
 
 
-async def test_connect_sync_reply_disconnect(client, org, runtime, mailpit):
+async def test_connect_sync_reply_disconnect(client, org, runtime, mailpit, monkeypatch):
+    monkeypatch.setattr(runtime.settings, "allow_app_password_connections", True)
     r = await client.get("/v1/connections/presets", headers=org.headers)
     assert r.status_code == 200 and {p["key"] for p in r.json()["data"]} >= {"gmail", "yandex360", "m365", "imap"}
 

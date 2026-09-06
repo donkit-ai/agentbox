@@ -47,7 +47,10 @@ An operator creates `POST /v1/connection-links` with a provider, gives its 15-mi
 `GET /v1/connection-links/{id}`. The fragment is exchanged for a narrow HttpOnly/SameSite browser cookie: secret
 fragments do not reach HTTP access logs. Forms have CSRF tokens; successful links are single-use. Passwords and
 tokens are encrypted at rest and never returned by status endpoints. Treat the full URL as a private capability.
-HTTPS is required outside localhost. IMAP is verified before connecting; SMTP is checked when sending.
+HTTPS is required outside localhost. The browser first offers dedicated agent email and a Google-authorized Gmail
+connection. Dedicated addresses require operator-enabled external delivery. Gmail uses the Gmail API with
+`gmail.readonly` and `gmail.send`; its profile is verified before connecting. App passwords are an opt-in OSS-only
+advanced option. See [connection behavior and owner setup](mail-connection.md).
 
 Configure `AGENTBOX_GOOGLE_CLIENT_ID`/`AGENTBOX_GOOGLE_CLIENT_SECRET` or
 `AGENTBOX_M365_CLIENT_ID`/`AGENTBOX_M365_CLIENT_SECRET`; optional `AGENTBOX_M365_TENANT` is `common` or a tenant UUID.
@@ -58,7 +61,8 @@ Microsoft 365 IMAP does not support app passwords. These provider requirements c
 Core OAuth uses PKCE-S256, browser-bound state, nonce, and signed token audience/issuer/expiry validation.
 Refresh tokens remain encrypted. See official [Google OIDC](https://developers.google.com/identity/openid-connect/openid-connect)
 and [Microsoft code flow](https://learn.microsoft.com/en-us/entra/identity-platform/v2-oauth2-auth-code-flow) docs.
-Enterprise compatibility OAuth endpoints remain available; new setups should use core browser links.
+The enterprise Gmail start endpoint opens this same browser flow; old Gmail callbacks require a restart.
+Existing full-scope Gmail connections require revocation and reconnection; refreshing cannot reduce their grants.
 
 ## v0.2 migration
 

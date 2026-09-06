@@ -39,3 +39,54 @@ def test_mcp_templates_have_correct_client_shapes():
         assert "@v0.2.0#subdirectory=sdk/python" in entry["args"][1]
     remote = tomllib.loads((root / "codex-http.toml").read_text())["mcp_servers"]["agentbox"]
     assert remote["url"].endswith("/mcp") and remote["bearer_token_env_var"] == "AGENTBOX_API_KEY"
+
+
+@pytest.fixture
+def clean_mail_environment(monkeypatch):
+    from agentbox.onboarding import MAIL_SETTINGS
+
+    for key in MAIL_SETTINGS:
+        monkeypatch.delenv(key, raising=False)
+
+
+def test_missing_mailbox_setup_fails_before_docker(tmp_path, monkeypatch, clean_mail_environment):
+    import agentbox.onboarding as setup
+
+    def unexpected(*args, **kwargs):
+        raise AssertionError("Docker must not run before mailbox configuration is validated")
+
+    monkeypatch.setattr(setup.subprocess, "run", unexpected)
+    target = tmp_path / "mail"
+    result = CliRunner().invoke(app, ["init", "--mode", "mailbox", "--directory", str(target)])
+    assert result.exit_code != 0 and "--config mailbox.env" in result.output and "--app-passwords" in result.output
+    assert not target.exists()
+
+
+def test_mail_config_filters_foreign_deployment_and_preserves_secrets(tmp_path, clean_mail_environment):
+    from agentbox.onboarding import compose_env, mail_configuration
+
+    config = tmp_path / "mailbox.env"
+    config.write_text("AGENTBOX_GOOGLE_CLIENT_ID=client-id\nAGENTBOX_GOOGLE_CLIENT_SECRET='literal-$SECRET'\n"
+                      "AGENTBOX_EDITION=cloud\nPOSTGRES_PASSWORD=foreign\nAGENTBOX_APP_SECRET_KEY=foreign\n")
+    settings = mail_configuration(config, mode="mailbox", provider="gmail", app_passwords=False)
+    assert settings == {"AGENTBOX_GOOGLE_CLIENT_ID": "client-id", "AGENTBOX_GOOGLE_CLIENT_SECRET": "literal-$SECRET"}
+    saved = tmp_path / "generated.env"
+    private_file(saved, compose_env(settings))
+    assert stat.S_IMODE(saved.stat().st_mode) == 0o600
+
+
+def test_demo_ignores_ambient_mail_settings(monkeypatch):
+    from agentbox.onboarding import mail_configuration
+
+    monkeypatch.setenv("AGENTBOX_OUTBOUND_SMTP_HOST", "smtp.real.example")
+    monkeypatch.setenv("AGENTBOX_GOOGLE_CLIENT_SECRET", "do-not-import")
+    assert mail_configuration(None, mode="demo", provider="gmail", app_passwords=False) == {}
+
+
+def test_app_password_is_an_explicit_self_hosted_choice(clean_mail_environment):
+    from agentbox.onboarding import mail_configuration
+
+    assert mail_configuration(None, mode="mailbox", provider="yandex360", app_passwords=True) == {
+        "AGENTBOX_ALLOW_APP_PASSWORD_CONNECTIONS": "true"}
+    result = CliRunner().invoke(app, ["init", "--mode", "mailbox", "--provider", "m365", "--app-passwords"])
+    assert result.exit_code != 0 and "requires OAuth" in result.output

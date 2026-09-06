@@ -110,6 +110,8 @@ async def create_outbound_message(
     to = _dedupe(draft.to, set())
     cc = _dedupe(draft.cc, {a["email"] for a in to})
     bcc = _dedupe(draft.bcc, {a["email"] for a in to + cc})
+    if len(to) + len(cc) + len(bcc) > settings.max_outbound_recipients:
+        raise APIError(422, "too_many_recipients", "Too many recipients in a single message.")
     principal = session.info.get("principal")
     if principal and principal.permission_profile == "autonomous":
         if any(a["email"].lower() not in principal.allowed_recipients for a in to + cc + bcc):

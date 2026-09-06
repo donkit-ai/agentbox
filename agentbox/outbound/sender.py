@@ -4,7 +4,8 @@ import structlog
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from agentbox.db.models import Attachment, DeliveryAttempt, Inbox, Message, utcnow
+from agentbox.api.errors import APIError
+from agentbox.db.models import Attachment, DeliveryAttempt, Inbox, Message, Organization, utcnow
 from agentbox.domain.ids import new_id
 from agentbox.extensions import registry
 from agentbox.jobs.queue import RetryLater, backoff_for
@@ -49,6 +50,20 @@ async def send_outbound(ctx: JobContext, session: AsyncSession) -> None:
     if message is None or message.status != "queued":
         return
     inbox = await session.get(Inbox, message.inbox_id)
+    org = await session.get(Organization, message.organization_id)
+    try:
+        if (org is None or org.status != "active" or inbox is None
+                or inbox.status != "active" or inbox.deleted_at is not None):
+            raise APIError(403, "delivery_disabled", "Workspace or mailbox is inactive.")
+        if inbox.expires_at and inbox.expires_at <= utcnow():
+            raise APIError(403, "delivery_disabled", "Mailbox has expired.")
+        for hook in registry().hooks(ctx.runtime.settings, "message.before_deliver"):
+            await hook(session, message.organization_id, ctx.runtime.settings)
+    except APIError as exc:
+        message.status, message.error_code, message.error_message = "rejected", exc.code, exc.message
+        await emit(session, organization_id=message.organization_id, resource_type="message", resource_id=message.id,
+                   type="message.rejected", payload={"inbox_id": message.inbox_id, "error": exc.code})
+        return
     rows = list((await session.scalars(select(Attachment).where(Attachment.message_id == message.id))).all())
     parts: list[OutboundAttachment] = []
     for a in rows:
@@ -77,7 +92,12 @@ async def send_outbound(ctx: JobContext, session: AsyncSession) -> None:
         cfg = await smtp_config_for_inbox(session, ctx.runtime.settings, inbox.id, http=ctx.runtime.http)
         if cfg is None:
             raise PermanentError("mailbox connection is missing or disconnected")
-        provider = SMTPRelayProvider(host=cfg["host"], port=cfg["port"], username=cfg["username"],
+        if cfg.get("transport") == "gmail_api":
+            from agentbox.connectors.gmail import GmailProvider
+
+            provider = GmailProvider(ctx.runtime.http, cfg["config"])
+        else:
+            provider = SMTPRelayProvider(host=cfg["host"], port=cfg["port"], username=cfg["username"],
                                      password=cfg["password"], starttls=cfg["starttls"], use_tls=cfg["use_tls"],
                                      oauth_token=cfg.get("oauth_token"))
         mail_from = cfg["mail_from"]

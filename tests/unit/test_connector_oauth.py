@@ -17,6 +17,8 @@ async def test_google_pkce_and_verified_identity(bad_claim):
     settings = Settings(_env_file=None, google_client_id="google-app", google_client_secret="secret")
     params = parse_qs(urlsplit(oauth.authorize_url(settings, "gmail", "http://localhost/callback", "state", "verifier", "nonce")).query)
     assert params["code_challenge_method"] == ["S256"] and params["nonce"] == ["nonce"]
+    assert set(params["scope"][0].split()) == {"openid", "email", *oauth.GMAIL_SCOPES}
+    assert params["include_granted_scopes"] == ["false"] and "select_account" in params["prompt"][0]
     key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
     jwk = json.loads(jwt.algorithms.RSAAlgorithm.to_jwk(key.public_key())) | {"kid": "test-key"}
     claims = {"iss": "https://accounts.google.com", "aud": "google-app", "sub": "subject", "nonce": "nonce",

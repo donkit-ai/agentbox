@@ -1,9 +1,4 @@
-"""Mailbox connectors: expose an existing IMAP/SMTP mailbox (Gmail, Yandex 360, VK WorkSpace, Microsoft 365, any
-IMAP) through the same inbox / thread / message / event API, so an agent gets a working address without a domain.
-
-Inbound: a periodic job fetches new UIDs over IMAP and runs them through the normal inbound processor.
-Outbound: messages from a connected inbox are sent through the mailbox's own SMTP with its own address as sender.
-Password-based auth is built in; an extension can keep OAuth tokens fresh via the ``connector.refresh_config`` hook."""
+"""Existing mailboxes through Gmail API or IMAP/SMTP, with encrypted credentials."""
 
 from __future__ import annotations
 
@@ -20,6 +15,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from agentbox.api.errors import APIError
 from agentbox.config import Settings
+from agentbox.connectors.gmail import GmailAPI
 from agentbox.connectors.xoauth2 import xoauth2_string
 from agentbox.db.models import InboundIngest, Inbox, MailboxConnection, utcnow
 from agentbox.domain.addresses import is_valid_email, normalize_email
@@ -44,8 +40,7 @@ PRESETS: dict[str, dict] = {
                      "a Microsoft app and enable IMAP and SMTP AUTH for the mailbox.", "oauth": "m365"},
     "gmail": {"label": "Google Workspace / Gmail", "imap_host": "imap.gmail.com", "imap_port": 993,
               "smtp_host": "smtp.gmail.com", "smtp_port": 587, "smtp_ssl": False,
-              "hint": "Create an app password (Google account → Security → 2-step verification → App passwords), or "
-                      "connect with OAuth when the operator has registered a Google app.", "oauth": "gmail"},
+              "hint": "Connect through Google. App passwords are an advanced self-hosting option.", "oauth": "gmail"},
     "imap": {"label": "Generic IMAP + SMTP", "imap_host": "", "imap_port": 993, "smtp_host": "", "smtp_port": 587,
              "smtp_ssl": False, "hint": "Any mailbox that speaks IMAP over TLS and authenticated SMTP."},
 }
@@ -111,6 +106,7 @@ def connection_to_dict(c: MailboxConnection, settings: Settings) -> dict:
     return {"id": c.id, "inbox_id": c.inbox_id, "provider": c.provider, "address": c.address, "status": c.status,
             "imap_host": cfg.get("imap_host"), "smtp_host": cfg.get("smtp_host"), "username": cfg.get("username"),
             "auth": cfg.get("auth", "password"),
+            "transport": cfg.get("transport", "imap_smtp"),
             "last_uid": c.last_uid, "last_sync_at": c.last_sync_at.isoformat() if c.last_sync_at else None,
             "last_error": c.last_error, "sync_interval_seconds": c.sync_interval_seconds}
 
@@ -119,7 +115,7 @@ async def connect_mailbox(
     session: AsyncSession, settings: Settings, *, organization_id: str, provider: str, address: str, username: str | None,
     password: str | None, imap_host: str | None = None, imap_port: int | None = None, smtp_host: str | None = None,
     smtp_port: int | None = None, smtp_ssl: bool | None = None, display_name: str | None = None, metadata: dict | None = None,
-    oauth: dict | None = None, verify_credentials: bool = False, import_history: bool = True,
+    oauth: dict | None = None, verify_credentials: bool = False, import_history: bool = True, http=None,
 ) -> tuple[Inbox, MailboxConnection]:
     """`oauth` (extension-provided token config) replaces the password; it is stored encrypted with the rest."""
     preset = PRESETS.get(provider)
@@ -130,18 +126,34 @@ async def connect_mailbox(
         raise APIError(422, "validation_error", "Enter the mailbox address.")
     if not password and not oauth:
         raise APIError(422, "validation_error", "Password / app password is required.")
+    if not oauth and (settings.edition != "oss" or not settings.allow_app_password_connections):
+        raise APIError(403, "app_password_disabled", "App passwords are disabled. Connect through the provider's authorization page.")
     if provider == "m365" and not oauth:
         raise APIError(422, "oauth_required", "Microsoft 365 requires OAuth; app passwords cannot authenticate IMAP.")
+    for hook in registry().hooks(settings, "inbox.before_create"):
+        await hook(session, organization_id, settings)
     cfg = {"imap_host": imap_host or preset["imap_host"], "imap_port": imap_port or preset["imap_port"],
            "smtp_host": smtp_host or preset["smtp_host"], "smtp_port": smtp_port or preset["smtp_port"],
            "smtp_ssl": preset["smtp_ssl"] if smtp_ssl is None else smtp_ssl, "username": username or address,
            "password": password, "folder": "INBOX"}
     if oauth:
         cfg.update({k: v for k, v in oauth.items() if k != "email"})
-    if not cfg["imap_host"] or not cfg["smtp_host"]:
+    gmail = provider == "gmail" and bool(oauth)
+    if gmail:
+        from agentbox.connectors.oauth import gmail_scopes
+
+        if cfg.get("transport") != "gmail_api":
+            raise APIError(409, "oauth_reconnect_required", "Reconnect Gmail to use limited read/send permissions.")
+        gmail_scopes(" ".join(cfg.get("scopes", [])))
+        if http is None:
+            raise APIError(503, "gmail_unavailable", "Gmail requires the runtime HTTP client.")
+        await GmailAPI(http, cfg).initialize(address, import_history=import_history)
+        for field in ("imap_host", "imap_port", "smtp_host", "smtp_port", "smtp_ssl", "password", "folder"):
+            cfg.pop(field, None)
+    if not gmail and (not cfg["imap_host"] or not cfg["smtp_host"]):
         raise APIError(422, "validation_error", "IMAP and SMTP hosts are required for a generic connection.")
     initial_uid = 0
-    if verify_credentials:
+    if verify_credentials and not gmail:
         def check():
             client = _client_factory(cfg)
             try:
@@ -186,6 +198,8 @@ async def _fresh_config(session: AsyncSession, settings: Settings, conn: Mailbox
     cfg = decrypt_json(settings.app_secret_key, conn.config_encrypted)
     from agentbox.connectors.oauth import refresh_if_needed
 
+    if conn.provider == "gmail" and cfg.get("auth") == "oauth" and cfg.get("transport") != "gmail_api":
+        raise APIError(409, "oauth_reconnect_required", "Reconnect Gmail to replace the old full-mailbox permission with limited read/send permissions.")
     if await refresh_if_needed(http, settings, cfg):
         conn.config_encrypted = encrypt_json(settings.app_secret_key, cfg)
         await session.flush()
@@ -202,6 +216,8 @@ async def smtp_config_for_inbox(session: AsyncSession, settings: Settings, inbox
     if conn is None:
         return None
     cfg = await _fresh_config(session, settings, conn, http)
+    if cfg.get("transport") == "gmail_api":
+        return {"transport": "gmail_api", "config": cfg, "mail_from": conn.address}
     oauth = cfg.get("auth") == "oauth"
     return {"host": cfg["smtp_host"], "port": cfg["smtp_port"], "username": cfg["username"],
             "password": None if oauth else cfg.get("password"), "oauth_token": cfg.get("access_token") if oauth else None,
@@ -227,6 +243,8 @@ async def get_connection(session: AsyncSession, organization_id: str, connection
 async def disconnect(session: AsyncSession, conn: MailboxConnection, actor: str | None = None) -> None:
     """Stop syncing and soft-delete the inbox (messages already received stay readable through the API)."""
     conn.status = "disconnected"
+    # Stop access locally even if the provider's grant has not yet been revoked.
+    conn.config_encrypted = ""
     inbox = await session.get(Inbox, conn.inbox_id)
     if inbox is not None and inbox.deleted_at is None:
         inbox.status, inbox.deleted_at = "deleted", utcnow()
@@ -248,13 +266,17 @@ def set_client_factory(factory) -> None:
 async def sync_connection(session: AsyncSession, storage, settings: Settings, conn: MailboxConnection, http=None) -> int:
     try:
         cfg = await _fresh_config(session, settings, conn, http)
-        client = await asyncio.to_thread(_client_factory, cfg)
-        try:
-            fetched = await asyncio.to_thread(client.fetch_new, conn.last_uid, 50)
-        finally:
-            await asyncio.to_thread(client.close)
+        gmail = cfg.get("transport") == "gmail_api"
+        if gmail:
+            fetched = [FetchedMail(uid=0, raw=raw) for raw in await GmailAPI(http, cfg).fetch_new()]
+        else:
+            client = await asyncio.to_thread(_client_factory, cfg)
+            try:
+                fetched = await asyncio.to_thread(client.fetch_new, conn.last_uid, 50)
+            finally:
+                await asyncio.to_thread(client.close)
     except Exception as e:  # noqa: BLE001
-        conn.last_error = f"{type(e).__name__}: {e}"[:500]
+        conn.last_error = e.message if isinstance(e, APIError) else "Mailbox sync failed. Check the connection or reconnect."
         conn.last_sync_at = utcnow()
         log.warning("connector_sync_failed", connection=conn.id, error=conn.last_error)
         return 0
@@ -271,6 +293,8 @@ async def sync_connection(session: AsyncSession, storage, settings: Settings, co
         await enqueue(session, "inbound_process", {"ingest_id": ingest_id})
         conn.last_uid = max(conn.last_uid, item.uid)
         count += 1
+    if gmail:
+        conn.config_encrypted = encrypt_json(settings.app_secret_key, cfg)
     conn.last_error = None
     conn.last_sync_at = utcnow()
     return count

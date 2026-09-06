@@ -15,6 +15,7 @@ Hook names and signatures (all async):
 - ``dashboard.logout(request, session) -> None``
 - ``inbox.before_create(session, organization_id, settings)``, ``message.before_send(...)``,
   ``domain.before_create(...)`` (same arguments): raise :class:`agentbox.api.errors.APIError` to refuse.
+- ``diagnostics.checks(session, runtime, organization_id) -> list[dict]``: add edition-specific health checks.
 - ``outbound.provider(session, runtime, inbox) -> (provider, mail_from) | None``: take over sending for an inbox.
 """
 

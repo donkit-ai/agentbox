@@ -29,6 +29,7 @@ async def connectors(request: Request, connect: str | None = None, principal=Dep
     rows = await list_connections(session, principal.organization_id)
     ctx = await _shell(request, session, principal, "connectors")
     ctx.update({"connections": [connection_to_dict(c, runtime.settings) for c in rows], "presets": PRESETS,
+                "advanced": runtime.settings.edition == "oss" and runtime.settings.allow_app_password_connections,
                 "connect": connect, "error": request.query_params.get("error")})
     return _render(request, "connectors.html", ctx)
 

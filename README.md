@@ -2,7 +2,8 @@
 
 Give a software agent a real email address with one API call, then send, receive, reply and forward with threads,
 attachments and signed webhooks. Governed by policies, approval gates and suppressions; delivered through pluggable
-providers; operated from a console; driven from Python, TypeScript or MCP. Apache-2.0, self-hostable, no caps.
+providers; operated from a console; driven from Python, TypeScript or MCP. Apache-2.0, self-hostable,
+with configurable policies and no paid-plan quotas. By Mikhail Baklanov and contributors.
 
 | Area | Highlights |
 |---|---|
@@ -23,8 +24,10 @@ From this checkout, with Docker/Compose and uv installed:
     uv run agentbox init --build --mode demo
 
 This starts an isolated stack, generates secrets and an inbox-scoped key, and verifies a local email roundtrip.
-Mailpit captures demo mail; it does not deliver to the internet. Use `--mode mailbox --provider gmail` to connect
-real mail in the browser instead. See [the full guide](docs/agents.md) for client-specific configs and examples.
+Mailpit captures demo mail; it does not deliver to the internet. With Google OAuth configured by the operator,
+use `--mode mailbox --provider gmail --config mailbox.env` to connect real mail through Google's consent page. The same browser flow
+also offers a dedicated agent address when external delivery is enabled. See [owner setup](docs/mail-connection.md)
+and [the full guide](docs/agents.md) for client-specific configs and examples.
 
 Any MCP-capable agent (OpenClaw, Hermes Agent, Claude Desktop, Cursor, Codex) gets email tools with one config entry,
 no install step:
@@ -35,9 +38,31 @@ no install step:
 
 This checkout uses the local SDK path until v0.2.0 is released; the guide includes pinned public-install templates.
 An operator can connect the user's own Gmail / Yandex / Microsoft 365 / IMAP mailbox with a
-browser connection link (OAuth or an eligible app password): no domain, DNS or port 25 needed. Microsoft 365
-requires OAuth. `docs/agents.md` has
+browser connection link: Gmail uses the Gmail API with read/send permissions; Microsoft 365 requires OAuth.
+App passwords are an explicitly enabled OSS advanced option. `docs/agents.md` has
 the details and `skills/agentbox/SKILL.md` is a drop-in skill for OpenClaw and Hermes.
+
+## Connect your own mailbox
+
+For a personal self-hosted installation, you configure your own connection. You do not need a hosted AgentBox
+account or a paid plan. Choose either Google/Microsoft OAuth or an explicitly enabled app-password connection.
+
+Google OAuth: put `AGENTBOX_GOOGLE_CLIENT_ID` and `AGENTBOX_GOOGLE_CLIENT_SECRET` in a private `mailbox.env`,
+register `http://localhost:8100/connect/oauth/callback`, then run:
+
+    uv run agentbox init --build --mode mailbox --provider gmail --config mailbox.env --directory agentbox-mail --port 8100
+
+If your mail provider supports app passwords, a personal installation can use:
+
+    uv run agentbox init --build --mode mailbox --provider gmail --app-passwords --directory agentbox-mail --port 8100
+
+Enter the address and **app password in the browser**. The flag enables that form; it never accepts a password
+on the command line. Use `--provider yandex360` or `--provider imap` for other IMAP/SMTP providers. Microsoft 365
+requires its own OAuth configuration. See [mail connection setup](docs/mail-connection.md) for permissions and
+provider requirements. Mail settings are saved in the generated private `.env` and survive a restart.
+
+The demo needs no Google application or real mail account. Real mailbox mode checks its configuration before
+starting Docker, so a missing OAuth setup cannot leave the wizard waiting at an unusable screen.
 
 ## Run services manually (advanced)
 

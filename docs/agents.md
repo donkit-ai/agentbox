@@ -34,11 +34,18 @@ uvx --from 'agentbox @ git+https://github.com/Slimper/agentbox@v0.2.0' agentbox 
 For your real mailbox:
 
 ```sh
-uv run agentbox init --build --directory agentbox-mail --port 8100 --mode mailbox --provider gmail
+uv run agentbox init --build --directory agentbox-mail --port 8100 --mode mailbox --provider gmail --config mailbox.env
 ```
 
-Open the printed private link. Enter credentials or authorize OAuth only in that browser. IMAP login is verified;
-new mail is the default, with optional history import. The wizard issues a `review` key after connection, so
+Create the private `mailbox.env` first with your Google OAuth client ID/secret and register
+`http://localhost:8100/connect/oauth/callback`. For a personal installation using an app password supported by
+the provider, replace `--config mailbox.env` with `--app-passwords`; enter the password only in the browser.
+Settings are saved into the generated stack's private `.env`. Demo mode always uses local Mailpit, even if the
+calling shell contains settings for a different deployment.
+
+Open the printed private link. Choose dedicated agent email (requires external delivery configured by the owner)
+or Gmail through Google's consent page. Gmail uses read/send API permissions and syncs only new incoming mail.
+App passwords require explicit OSS operator enablement in advanced settings. The wizard issues a `review` key after connection, so
 outgoing drafts need human approval in the console. Microsoft 365 requires an operator-configured OAuth app.
 See [OAuth setup and permission contract](agent-contract.md).
 

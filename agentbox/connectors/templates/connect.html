@@ -1,0 +1,91 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="light">
+  <title>Подключение почты · Agentbox</title>
+  <link rel="stylesheet" href="/dashboard/static/connect.css">
+  <script src="/dashboard/static/connect.js" defer></script>
+</head>
+<body data-view="{{ view }}">
+  <div class="page">
+    <header class="header">
+      <a class="brand" href="/" aria-label="Agentbox — главная"><span class="brand-mark" aria-hidden="true">a<span>↗</span></span>agentbox<span class="brand-dot">.</span></a>
+      <span class="header-note"><span class="status-dot"></span>Подключение почты</span>
+    </header>
+    <main id="main">
+      {% if view == 'choice' %}
+      <div class="intro">
+        <span class="eyebrow">ПОЧТА ДЛЯ ВАШЕГО АГЕНТА</span>
+        <h1>С какого адреса<br>будет писать агент?</h1>
+        <p>Создайте ему отдельную почту или подключите свой ящик.<br class="desktop-break"> Вы выбираете, к какой переписке у него будет доступ.</p>
+        <div class="workspace"><span aria-hidden="true">◈</span> Рабочее пространство <strong>{{ organization }}</strong></div>
+      </div>
+      <div class="choices">
+        <section class="choice choice-primary" aria-labelledby="managed-title">
+          <div class="card-top"><span class="mail-icon" aria-hidden="true">↗</span><span class="badge">Рекомендуем</span></div>
+          <h2 id="managed-title">Создать почту агенту</h2>
+          <p class="card-description">Отдельный адрес для задач, заявок<br class="desktop-break"> и переписки вашего агента.</p>
+          <ul class="features"><li>Личная почта остаётся личной</li><li>Агент получает и отправляет письма</li><li>Доступ можно отключить в Agentbox</li></ul>
+          <div class="card-action">
+            {% if managed_ready %}
+            <form method="post" action="/connect/{{ link.id }}/managed">
+              <input type="hidden" name="csrf" value="{{ csrf }}">
+              <label for="username">Имя адреса <span class="optional">· необязательно</span></label>
+              <div class="address-field"><input id="username" name="username" placeholder="my-agent" maxlength="64" autocomplete="off" autocapitalize="none" spellcheck="false" aria-describedby="domain-hint"><span id="domain-hint">@{{ managed_domain }}</span></div>
+              <p class="field-hint">Оставьте пустым — мы подберём свободный адрес.</p>
+              <button class="button button-primary" type="submit" data-busy="Создаём почту…">Создать почту агенту <span aria-hidden="true">↗</span></button>
+            </form>
+            {% else %}
+            <div class="availability" id="managed-unavailable"><span class="availability-title">{{ 'Нужна настройка доставки' if self_hosted else 'Скоро в этом пространстве' }}</span><p>{% if self_hosted %}Для адресов на своём домене настройте получение и отправку почты в вашей установке Agentbox.{% else %}Владелец Agentbox ещё не завершил настройку внешней доставки.{% endif %}</p></div>
+            <form method="post" action="/connect/{{ link.id }}/managed"><input type="hidden" name="csrf" value="{{ csrf }}"><button class="button button-primary" disabled aria-describedby="managed-unavailable">Создать почту агенту <span aria-hidden="true">↗</span></button></form>
+            {% endif %}
+            <p class="action-note">Без доступа к вашему личному ящику</p>
+          </div>
+        </section>
+        <section class="choice choice-secondary" aria-labelledby="gmail-title">
+          <div class="card-top"><span class="provider-icon" aria-hidden="true">{{ 'M' if oauth_provider == 'm365' else 'G' }}</span><span class="option-label">Существующий ящик</span></div>
+          <h2 id="gmail-title">{{ 'Подключить Microsoft 365' if oauth_provider == 'm365' else 'Подключить мой Gmail' }}</h2>
+          <p class="card-description">Для задач, которым нужна переписка<br class="desktop-break"> в вашем текущем почтовом ящике.</p>
+          <ul class="features"><li>Вы выбираете аккаунт у {{ 'Microsoft' if oauth_provider == 'm365' else 'Google' }}</li><li>Подтверждаете чтение и отправку писем</li><li>Пароль в Agentbox не вводится</li></ul>
+          <div class="access-note"><strong>Это доступ к вашей почте</strong><p>{% if oauth_provider == 'gmail' %}Разрешение на чтение охватывает весь ящик. Agentbox будет получать новые входящие письма и сможет отправлять письма от вашего имени. Права на изменение и удаление писем не запрашиваются.{% else %}Agentbox сможет читать входящие письма и отправлять письма от вашего имени через Microsoft 365.{% endif %}</p></div>
+          <div class="card-action">
+            {% if oauth_ready %}
+            <form method="post" action="/connect/{{ link.id }}/oauth">
+              <input type="hidden" name="csrf" value="{{ csrf }}">
+              <button class="button button-secondary" type="submit" data-busy="Открываем {{ 'Microsoft' if oauth_provider == 'm365' else 'Google' }}…">Продолжить с {{ 'Microsoft' if oauth_provider == 'm365' else 'Google' }} <span aria-hidden="true">→</span></button>
+            </form>
+            {% else %}
+            <div class="availability" id="oauth-unavailable"><span class="availability-title">Подключение пока недоступно</span><p>{% if self_hosted %}Вы управляете этой установкой. Для входа через {{ 'Microsoft' if oauth_provider == 'm365' else 'Google' }} настройте своё OAuth-приложение по инструкции подключения.{% else %}Владелец Agentbox ещё не настроил вход через {{ 'Microsoft' if oauth_provider == 'm365' else 'Google' }}. Вам не нужно создавать приложение.{% endif %}</p></div>
+            <form method="post" action="/connect/{{ link.id }}/oauth"><input type="hidden" name="csrf" value="{{ csrf }}"><button class="button button-secondary" disabled aria-describedby="oauth-unavailable">Продолжить с {{ 'Microsoft' if oauth_provider == 'm365' else 'Google' }} <span aria-hidden="true">→</span></button></form>
+            {% endif %}
+            <p class="action-note">Вы перейдёте на страницу {{ 'Microsoft' if oauth_provider == 'm365' else 'Google' }}</p>
+          </div>
+        </section>
+      </div>
+      <section class="control-note" aria-labelledby="control-title"><span class="control-icon" aria-hidden="true">⌁</span><div><h3 id="control-title">Доступ под вашим контролем</h3><p>Отключите подключённый ящик в разделе «Connectors» в Agentbox. Для Gmail также удалите доступ Agentbox в <a href="https://myaccount.google.com/connections" target="_blank" rel="noopener noreferrer">настройках аккаунта Google ↗</a>. Полученные ранее копии писем останутся в Agentbox; отключение само по себе их не удаляет. Отдельную почту агента можно удалить в разделе «Inboxes».</p></div></section>
+      {% if advanced and link.provider != 'm365' %}
+      <details class="advanced"{% if not oauth_ready and not managed_ready %} open{% endif %}><summary>Расширенные настройки · самостоятельное развёртывание</summary><div class="advanced-content">
+        <h3>Подключение через пароль приложения</h3><p>{{ preset.label }}. Этот способ даёт доступ по IMAP и SMTP. Ограничения разрешений Gmail API к нему не относятся. Используйте отдельный пароль приложения, а не пароль аккаунта.</p>
+        <form method="post" action="/connect/{{ link.id }}/password">
+          <input type="hidden" name="csrf" value="{{ csrf }}">
+          <div class="form-grid"><label>Адрес ящика<input type="email" name="address" required autocomplete="username"></label><label>Пароль приложения<input type="password" name="password" required autocomplete="new-password"></label></div>
+          {% if link.provider == 'imap' %}<div class="form-grid"><label>IMAP TLS host<input name="imap_host" required></label><label>Порт IMAP<input type="number" name="imap_port" value="993" min="1" max="65535"></label><label>SMTP STARTTLS host<input name="smtp_host" required></label><label>Порт SMTP<input type="number" name="smtp_port" value="587" min="1" max="65535"></label></div>{% endif %}
+          <label class="checkbox"><input type="checkbox" name="import_history"> Импортировать существующие письма</label>
+          <button class="button button-secondary" type="submit" data-busy="Проверяем подключение…">Разрешить доступ и подключить</button>
+        </form>
+      </div></details>
+      {% endif %}
+      {% elif view == 'opening' %}
+      <section class="result"><span class="result-symbol" aria-hidden="true">↗</span><span class="eyebrow">ПРИВАТНАЯ ССЫЛКА</span><h1>Открываем подключение</h1><p id="status" role="status" aria-live="polite">Проверяем вашу ссылку…</p><noscript><p>Включите JavaScript, чтобы открыть приватную ссылку. Дальнейший выбор работает без JavaScript.</p></noscript></section>
+      {% elif view == 'success' %}
+      <section class="result"><span class="result-symbol success-symbol" aria-hidden="true">✓</span><span class="eyebrow">ВСЁ ГОТОВО</span><h1>{{ 'Почта агента создана' if managed else 'Почта подключена' }}</h1><p class="result-address">{{ address }}</p><p>{% if managed %}У агента теперь отдельный адрес. Доступ к вашей личной почте не запрашивался.{% else %}Доступ к ящику подтверждён. Новые входящие письма будут появляться в Agentbox после синхронизации.{% endif %}</p><div class="result-next"><strong>Вернитесь к своему агенту</strong><p>Он получит результат подключения. Это окно можно закрыть.</p></div>{% if not managed %}<p class="result-footnote">Отключить ящик можно в разделе «Connectors». Сохранённые копии писем останутся в Agentbox.{% if gmail %} Разрешение Google можно отозвать в <a href="https://myaccount.google.com/connections" target="_blank" rel="noopener noreferrer">настройках аккаунта</a>.{% endif %}</p>{% endif %}</section>
+      {% else %}
+      <section class="result"><span class="result-symbol error-symbol" aria-hidden="true">!</span><span class="eyebrow">ПОДКЛЮЧЕНИЕ ПОЧТЫ</span><h1>{{ title }}</h1><p role="alert">{{ detail }}</p>{% if retry_url %}<a class="button button-secondary" href="{{ retry_url }}">Вернуться к выбору <span aria-hidden="true">→</span></a>{% endif %}</section>
+      {% endif %}
+    </main>
+    <footer><span>agentbox<span class="brand-dot">.</span> <span class="footer-description">Почта, с которой агент может работать.</span></span><span>Ваш выбор. Ваш доступ.</span></footer>
+  </div>
+</body>
+</html>

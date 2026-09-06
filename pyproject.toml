@@ -10,6 +10,7 @@ dependencies = [
   "uvicorn[standard]>=0.30",
   "pydantic>=2.8",
   "pydantic-settings>=2.4",
+  "python-dotenv>=1.0",
   "sqlalchemy[asyncio]>=2.0.32",
   "asyncpg>=0.29",
   "alembic>=1.13",

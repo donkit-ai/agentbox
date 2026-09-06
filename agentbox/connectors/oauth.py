@@ -10,10 +10,22 @@ import jwt
 
 from agentbox.api.errors import APIError
 
+GMAIL_SCOPES = {"https://www.googleapis.com/auth/gmail.readonly", "https://www.googleapis.com/auth/gmail.send"}
+
+
+def gmail_scopes(scope):
+    granted = set(scope.split())
+    mail_scopes = {s for s in granted if "/auth/gmail." in s or s == "https://mail.google.com/"}
+    if mail_scopes != GMAIL_SCOPES:
+        raise APIError(403, "gmail_permissions_invalid", "Allow reading and sending email. If you previously granted full Gmail access, revoke AgentBox in your Google account and connect again.")
+    return sorted(granted)
+
+
 PROVIDERS = {
     "gmail": {"authorize": "https://accounts.google.com/o/oauth2/v2/auth",
               "token": "https://oauth2.googleapis.com/token", "keys": "https://www.googleapis.com/oauth2/v3/certs",
-              "scope": "openid email https://mail.google.com/", "extra": {"access_type": "offline", "prompt": "consent"}},
+              "scope": "openid email " + " ".join(sorted(GMAIL_SCOPES)),
+              "extra": {"access_type": "offline", "prompt": "consent select_account", "include_granted_scopes": "false"}},
     "m365": {"authorize": "https://login.microsoftonline.com/{tenant}/oauth2/v2.0/authorize",
              "token": "https://login.microsoftonline.com/{tenant}/oauth2/v2.0/token",
              "keys": "https://login.microsoftonline.com/common/discovery/v2.0/keys",
@@ -83,8 +95,11 @@ async def exchange_code(http, settings, provider, code, redirect_uri, verifier, 
             raise ValueError("offline access not granted")
     except (jwt.PyJWTError, KeyError, ValueError, StopIteration, TypeError) as exc:
         raise APIError(502, "oauth_identity_invalid", "Could not verify the mailbox identity or offline consent. Reconnect.") from exc
-    return {"auth": "oauth", "oauth_provider": provider, "email": address.lower(), "access_token": tokens["access_token"],
+    config = {"auth": "oauth", "oauth_provider": provider, "email": address.lower(), "access_token": tokens["access_token"],
             "refresh_token": tokens["refresh_token"], "expires_at": time.time() + int(tokens.get("expires_in", 3600))}
+    if provider == "gmail":
+        config.update(transport="gmail_api", scopes=gmail_scopes(tokens.get("scope", PROVIDERS[provider]["scope"])))
+    return config
 
 
 async def refresh_if_needed(http, settings, cfg):
@@ -94,6 +109,8 @@ async def refresh_if_needed(http, settings, cfg):
         raise APIError(503, "oauth_refresh_unavailable", "OAuth refresh requires the runtime HTTP client.")
     tokens = await token_request(http, settings, cfg["oauth_provider"],
                                   {"grant_type": "refresh_token", "refresh_token": cfg["refresh_token"]})
+    if cfg["oauth_provider"] == "gmail" and tokens.get("scope"):
+        cfg["scopes"] = gmail_scopes(tokens["scope"])
     cfg.update(access_token=tokens["access_token"], expires_at=time.time() + int(tokens.get("expires_in", 3600)))
     if tokens.get("refresh_token"):
         cfg["refresh_token"] = tokens["refresh_token"]

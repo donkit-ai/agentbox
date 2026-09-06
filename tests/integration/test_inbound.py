@@ -135,3 +135,36 @@ async def test_bounce_dsn_marks_message_bounced(client, org, runtime, smtp_edge)
     async with runtime.db.session() as s:
         ev = await s.scalar(select(Event).where(Event.type == "message.bounced"))
         assert ev.payload["bounce"]["recipients"][0]["recipient"] == "nobody@supplier.ru"
+
+
+async def test_shared_domain_routes_envelope_recipients_to_separate_workspaces(client, make_org, runtime, smtp_edge):
+    from agentbox.db.models import Organization
+
+    first, second = await make_org("First customer"), await make_org("Second customer")
+    boxes = []
+    for org, username in ((first, "customer-one"), (second, "customer-two")):
+        response = await client.post("/v1/inboxes", headers=org.headers, json={"username": username})
+        assert response.status_code == 201
+        boxes.append(response.json())
+    # Header contains only the first address; the second is an envelope/BCC recipient.
+    message = _vendor_reply(boxes[0]["email"], subject="Shared envelope")
+    host, port = smtp_edge
+    await aiosmtplib.send(message, sender="sales@supplier.ru", recipients=[b["email"] for b in boxes],
+                          hostname=host, port=port, start_tls=False)
+    await JobWorker(runtime, default_handlers(), kinds=["inbound_process"]).drain()
+    ids = []
+    for org, box in zip((first, second), boxes, strict=True):
+        messages = (await client.get(f"/v1/inboxes/{box['id']}/messages", headers=org.headers)).json()["data"]
+        assert len(messages) == 1 and messages[0]["attachments"][0]["filename"] == "offer.pdf"
+        ids.append(messages[0]["id"])
+        async with runtime.db.session() as session:
+            stored = await session.get(Message, ids[-1])
+            assert stored.organization_id == org.id and stored.raw_storage_key.startswith(f"org/{org.id}/")
+    assert (await client.get(f"/v1/messages/{ids[1]}", headers=first.headers)).status_code == 404
+    assert (await client.get(f"/v1/messages/{ids[0]}", headers=second.headers)).status_code == 404
+    async with runtime.db.session() as session:
+        organization = await session.get(Organization, first.id)
+        organization.status = "suspended"
+        await session.commit()
+    with pytest.raises(aiosmtplib.SMTPRecipientsRefused):
+        await _deliver(smtp_edge, "sales@supplier.ru", boxes[0]["email"], _vendor_reply(boxes[0]["email"]))
