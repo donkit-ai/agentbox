@@ -11,7 +11,7 @@ release; until then run from the checkout and use `uvx --from './sdk/python[mcp]
 Install Docker with Compose and [uv](https://docs.astral.sh/uv/getting-started/installation/):
 
 ```sh
-git clone https://github.com/Slimper/agentbox
+git clone https://github.com/donkit-ai/agentbox
 cd agentbox
 uv run agentbox init --build --mode demo
 ```
@@ -28,7 +28,7 @@ choose `--port 18140` if occupied. Load only `agent.env` into the agent process 
 After publishing the Docker release, skip building:
 
 ```sh
-uvx --from 'agentbox @ git+https://github.com/Slimper/agentbox@v0.2.0' agentbox init --mode demo
+uvx --from 'agentbox @ git+https://github.com/donkit-ai/agentbox@v0.2.0' agentbox init --mode demo
 ```
 
 For your real mailbox:

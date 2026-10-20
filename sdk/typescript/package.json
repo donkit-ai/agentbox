@@ -7,7 +7,7 @@
   "types": "dist/index.d.ts",
   "files": ["dist", "README.md", "LICENSE"],
   "exports": { ".": { "types": "./dist/index.d.ts", "import": "./dist/index.js" } },
-  "repository": { "type": "git", "url": "git+https://github.com/Slimper/agentbox.git", "directory": "sdk/typescript" },
+  "repository": { "type": "git", "url": "git+https://github.com/donkit-ai/agentbox.git", "directory": "sdk/typescript" },
   "publishConfig": { "access": "public" },
   "scripts": {
     "build": "tsc -p tsconfig.json",

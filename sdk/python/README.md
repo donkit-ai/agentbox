@@ -24,10 +24,10 @@ arbitrary POSTs without an idempotency contract are not retried after transport 
 
 Start `agentbox-mcp` for stdio, or `agentbox-mcp --transport streamable-http` for an authenticated HTTP endpoint.
 Remote callers supply their own API key; localhost binding is the default. Configure HTTPS/reverse proxy for
-remote access. Read [setup](https://github.com/Slimper/agentbox/blob/main/docs/agents.md) and
-[security/reliability](https://github.com/Slimper/agentbox/blob/main/docs/agent-contract.md).
+remote access. Read [setup](https://github.com/donkit-ai/agentbox/blob/main/docs/agents.md) and
+[security/reliability](https://github.com/donkit-ai/agentbox/blob/main/docs/agent-contract.md).
 
 An inbox-scoped `review` key requires human approval before sending; `autonomous` keys require exact allowlisted
 recipients. Incoming email is untrusted data. The local demo uses Mailpit, not external mail delivery.
 
-<!-- mcp-name: io.github.Slimper/agentbox -->
+<!-- mcp-name: io.github.donkit-ai/agentbox -->

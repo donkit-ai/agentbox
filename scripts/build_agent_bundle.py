@@ -24,15 +24,15 @@ with zipfile.ZipFile(skill, "w", zipfile.ZIP_DEFLATED) as archive:
     archive.write(ROOT / "LICENSE", "LICENSE")
 server = {
     "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
-    "name": "io.github.Slimper/agentbox",
+    "name": "io.github.donkit-ai/agentbox",
     "title": "AgentBox Email",
     "description": "Email for agents: scoped inboxes, mailbox connections, attachments and durable reply waits.",
     "version": version,
-    "repository": {"url": "https://github.com/Slimper/agentbox", "source": "github"},
+    "repository": {"url": "https://github.com/donkit-ai/agentbox", "source": "github"},
     "packages": [
         {
             "registryType": "mcpb",
-            "identifier": f"https://github.com/Slimper/agentbox/releases/download/v{version}/{bundle.name}",
+            "identifier": f"https://github.com/donkit-ai/agentbox/releases/download/v{version}/{bundle.name}",
             "version": version,
             "transport": {"type": "stdio"},
             "fileSha256": hashlib.sha256(bundle.read_bytes()).hexdigest(),

@@ -4,10 +4,10 @@
   "display_name": "AgentBox Email",
   "version": "0.2.0",
   "description": "Email for agents with browser mailbox connections, scoped permissions and persistent reply waits.",
-  "author": {"name": "AgentBox", "url": "https://github.com/Slimper/agentbox"},
+  "author": {"name": "AgentBox", "url": "https://github.com/donkit-ai/agentbox"},
   "license": "Apache-2.0",
-  "repository": {"type": "git", "url": "https://github.com/Slimper/agentbox"},
-  "privacy_policies": ["https://github.com/Slimper/agentbox/blob/main/docs/data-handling.md"],
+  "repository": {"type": "git", "url": "https://github.com/donkit-ai/agentbox"},
+  "privacy_policies": ["https://github.com/donkit-ai/agentbox/blob/main/docs/data-handling.md"],
   "server": {
     "type": "python",
     "entry_point": "server.py",

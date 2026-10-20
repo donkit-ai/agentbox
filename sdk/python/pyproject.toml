@@ -12,8 +12,8 @@ dependencies = ["httpx>=0.27", "typing-extensions>=4.7"]
 mcp = ["mcp>=1.26,<3"]
 
 [project.urls]
-Repository = "https://github.com/Slimper/agentbox"
-Documentation = "https://github.com/Slimper/agentbox/blob/main/docs/agents.md"
+Repository = "https://github.com/donkit-ai/agentbox"
+Documentation = "https://github.com/donkit-ai/agentbox/blob/main/docs/agents.md"
 
 [project.scripts]
 agentbox-mcp = "agentbox_sdk.mcp_server:main"

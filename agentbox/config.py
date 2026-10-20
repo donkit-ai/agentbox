@@ -56,7 +56,7 @@ class Settings(BaseSettings):
     edition: str = "oss"
     public_base_url: str = "http://localhost:8000"
     support_email: str = "sales@agentbox.ru"
-    github_url: str = "https://github.com/Slimper/agentbox"
+    github_url: str = "https://github.com/donkit-ai/agentbox"
     connector_sync_interval_seconds: int = 120
     # Bring-your-own OAuth applications are available in the open-source edition.
     m365_client_id: str | None = None

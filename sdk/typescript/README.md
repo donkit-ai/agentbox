@@ -18,4 +18,4 @@ for await (const message of mail.messages.iter(process.env.AGENTBOX_INBOX_ID!)) 
 Retrying a send uses the same idempotency key. Supply your own stable key across restarts; do not blindly retry
 older than server retention (default 24 hours). `queued`/`provider_accepted` are not proof of delivery.
 `connections.createLink()` keeps mailbox passwords out of agent context. Use inbox-scoped permission presets.
-See [setup and runnable examples](https://github.com/Slimper/agentbox/blob/main/docs/agents.md).
+See [setup and runnable examples](https://github.com/donkit-ai/agentbox/blob/main/docs/agents.md).

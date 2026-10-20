@@ -17,7 +17,7 @@ app.add_typer(org_app, name="org")
 @app.command()
 def init(
     directory: Path = Path("agentbox-local"), mode: str = "demo", provider: str = "gmail",
-    image: str = "ghcr.io/slimper/agentbox:0.2.0", build: bool = False,
+    image: str = "ghcr.io/donkit-ai/agentbox:0.2.0", build: bool = False,
     port: int = 8000, name: str = "My agents", domain: str = "",
     config: Path | None = typer.Option(None, help="Private .env with OAuth or mail delivery settings."),
     app_passwords: bool = typer.Option(False, help="Explicitly enable the advanced IMAP/SMTP app-password form."),

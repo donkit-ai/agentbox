@@ -2,7 +2,7 @@
 manifest_version: 1
 name: agentbox
 description: Email for agents with scoped inboxes, attachments, human approval and durable reply waits.
-source: https://github.com/Slimper/agentbox
+source: https://github.com/donkit-ai/agentbox
 transport:
   type: stdio
   command: uvx

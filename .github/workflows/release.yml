@@ -85,7 +85,7 @@ jobs:
       - uses: docker/metadata-action@v5
         id: meta
         with:
-          images: ghcr.io/slimper/agentbox
+          images: ghcr.io/donkit-ai/agentbox
           tags: |
             type=semver,pattern={{version}}
             type=semver,pattern={{major}}.{{minor}}
